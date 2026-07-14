@@ -12,9 +12,11 @@ wheel-of-fortune spin. No build step, no dependencies — just open
   - 💶 **Budget**: low / mid / high
   - ✈️ **Distance**: regional (car/train), Europe, or long-haul
   - 👥 **Travel party**: just the two of you, or with friends & family
-  - 🏖️ **Vibe**: beach, city, nature, or snow
+  - 🌲 **Vibe**: nature, culture & museums, food, or snow
   - 📅 **Season**: when you want to travel (destinations are tagged with
     their best months)
+- **Favourites** ⭐ — star the destinations you love (in the manage panel)
+  and they get a double-width segment on the wheel: twice the chance to win.
 - **Manage the destination list** ⚙️ — untick built-in countries to keep
   them off the wheel, or add your own destinations with full tagging.
 - **Veto & respin** 🙅 — each partner gets one veto per round, so a single

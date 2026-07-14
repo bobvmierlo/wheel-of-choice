@@ -4,7 +4,9 @@
 
   const STORAGE_KEY = 'wheel-of-wander-v1';
 
-  const VIBE_LABELS = { beach: '🏖️ beach', city: '🏙️ city', nature: '🌲 nature', winter: '⛷️ snow' };
+  const VIBE_LABELS = { nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food', winter: '⛷️ snow' };
+  const VIBE_MIGRATION = { beach: 'nature', city: 'culture' }; // pre-favourites tag names
+  const FAVORITE_WEIGHT = 2; // favourites get a double-width wheel segment
   const BUDGET_LABELS = { low: '💶 low budget', mid: '💶💶 mid budget', high: '💶💶💶 high budget' };
   const DISTANCE_LABELS = { regional: '🚗 regional', europe: '✈️ Europe', longhaul: '🌏 long-haul' };
 
@@ -19,6 +21,7 @@
     filters: { budget: 'any', distance: 'any', party: 'couple', vibe: 'any', season: 'any' },
     customDestinations: [],
     disabledIds: [],
+    favoriteIds: BUILTIN_DESTINATIONS.filter((d) => d.favorite).map((d) => d.id),
     history: [],
     // Round state (not persisted): each partner gets one veto per round.
     vetoedIds: [],
@@ -33,15 +36,25 @@
       if (saved.filters) Object.assign(state.filters, saved.filters);
       if (Array.isArray(saved.customDestinations)) state.customDestinations = saved.customDestinations;
       if (Array.isArray(saved.disabledIds)) state.disabledIds = saved.disabledIds;
+      if (Array.isArray(saved.favoriteIds)) state.favoriteIds = saved.favoriteIds;
       if (Array.isArray(saved.history)) state.history = saved.history;
+      // Migrate state saved before the vibe taxonomy changed
+      if (!(state.filters.vibe in VIBE_LABELS) && state.filters.vibe !== 'any') state.filters.vibe = 'any';
+      for (const d of state.customDestinations) {
+        d.vibes = [...new Set(d.vibes.map((v) => VIBE_MIGRATION[v] || v))];
+      }
     } catch (err) {
       console.warn('Could not load saved state:', err);
     }
   }
 
   function saveState() {
-    const { filters, customDestinations, disabledIds, history } = state;
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ filters, customDestinations, disabledIds, history }));
+    const { filters, customDestinations, disabledIds, favoriteIds, history } = state;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ filters, customDestinations, disabledIds, favoriteIds, history }));
+  }
+
+  function isFavorite(d) {
+    return state.favoriteIds.includes(d.id);
   }
 
   function allDestinations() {
@@ -125,11 +138,12 @@
       return;
     }
 
-    const seg = (Math.PI * 2) / n;
+    const bounds = segmentBounds();
 
     for (let i = 0; i < n; i++) {
-      const start = rotation + i * seg;
-      const end = start + seg;
+      const seg = bounds[i].end - bounds[i].start;
+      const start = rotation + bounds[i].start;
+      const end = rotation + bounds[i].end;
 
       ctx.beginPath();
       ctx.moveTo(cx, cy);
@@ -156,7 +170,7 @@
       ctx.fillStyle = 'rgba(20, 10, 40, 0.9)';
       const fontSize = Math.max(11, Math.min(20, (radius * seg) / 3.2, size * 0.032));
       ctx.font = `700 ${fontSize}px system-ui, sans-serif`;
-      let label = `${d.flag} ${d.name}`;
+      let label = `${isFavorite(d) ? '⭐ ' : ''}${d.flag} ${d.name}`;
       const maxWidth = radius * 0.62;
       while (ctx.measureText(label).width > maxWidth && label.length > 6) {
         label = label.slice(0, -2).trimEnd() + '…';
@@ -172,13 +186,27 @@
     ctx.fill();
   }
 
+  // Angular extent of each segment (before wheel rotation), sized by weight:
+  // favourites take twice the arc of a regular destination.
+  function segmentBounds() {
+    const weights = currentSegments.map((d) => (isFavorite(d) ? FAVORITE_WEIGHT : 1));
+    const total = weights.reduce((a, b) => a + b, 0);
+    const bounds = [];
+    let acc = 0;
+    for (const w of weights) {
+      bounds.push({ start: (acc / total) * Math.PI * 2, end: ((acc + w) / total) * Math.PI * 2 });
+      acc += w;
+    }
+    return bounds;
+  }
+
   function winningIndex() {
-    const n = currentSegments.length;
-    const seg = (Math.PI * 2) / n;
     const pointerAngle = -Math.PI / 2; // pointer sits at the top
     let a = (pointerAngle - rotation) % (Math.PI * 2);
     if (a < 0) a += Math.PI * 2;
-    return Math.floor(a / seg) % n;
+    const bounds = segmentBounds();
+    const idx = bounds.findIndex((b) => a >= b.start && a < b.end);
+    return idx === -1 ? currentSegments.length - 1 : idx;
   }
 
   function spin() {
@@ -219,6 +247,7 @@
   // ── Result modal ──────────────────────────────────────────────────
   function describe(d) {
     const parts = [
+      isFavorite(d) ? '⭐ favourite' : '',
       BUDGET_LABELS[d.budget],
       DISTANCE_LABELS[d.distance],
       d.vibes.map((v) => VIBE_LABELS[v]).join(' · '),
@@ -364,6 +393,23 @@
         saveState();
       });
 
+      const star = document.createElement('button');
+      star.type = 'button';
+      star.className = 'star-btn';
+      star.title = 'Favourites get a double chance on the wheel';
+      star.textContent = isFavorite(d) ? '⭐' : '☆';
+      star.classList.toggle('starred', isFavorite(d));
+      star.addEventListener('click', () => {
+        if (isFavorite(d)) {
+          state.favoriteIds = state.favoriteIds.filter((id) => id !== d.id);
+        } else {
+          state.favoriteIds.push(d.id);
+        }
+        star.textContent = isFavorite(d) ? '⭐' : '☆';
+        star.classList.toggle('starred', isFavorite(d));
+        saveState();
+      });
+
       const name = document.createElement('span');
       name.className = 'dest-name';
       name.textContent = `${d.flag} ${d.name}`;
@@ -372,7 +418,7 @@
       meta.className = 'dest-meta';
       meta.textContent = `${d.budget} · ${DISTANCE_LABELS[d.distance]}`;
 
-      li.append(checkbox, name, meta);
+      li.append(checkbox, star, name, meta);
 
       if (customIds.has(d.id)) {
         const del = document.createElement('button');
@@ -409,7 +455,7 @@
       flag: document.getElementById('add-flag').value.trim() || '📍',
       budget: document.getElementById('add-budget').value,
       distance: document.getElementById('add-distance').value,
-      vibes: vibes.length ? vibes : ['beach', 'city', 'nature'],
+      vibes: vibes.length ? vibes : ['nature', 'culture', 'food'],
       seasons: seasons.length ? seasons : ['spring', 'summer', 'autumn', 'winter'],
       party: party.length ? party : ['couple', 'group'],
     });
@@ -451,9 +497,9 @@
   function refresh() {
     currentSegments = eligibleDestinations();
     const n = currentSegments.length;
-    matchCount.textContent = n === 1
-      ? '1 destination on the wheel'
-      : `${n} destinations on the wheel`;
+    const favs = currentSegments.filter(isFavorite).length;
+    matchCount.textContent = (n === 1 ? '1 destination on the wheel' : `${n} destinations on the wheel`) +
+      (favs > 0 ? ` · ⭐ ${favs} favourite${favs === 1 ? '' : 's'} with double chance` : '');
     spinBtn.disabled = n === 0 || spinning;
     drawWheel();
   }
