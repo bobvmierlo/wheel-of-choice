@@ -11,5 +11,10 @@ Thumbs.db
 node_modules/
 dist/
 
+# Python
+__pycache__/
+venv/
+.venv/
+
 # Local scratch
 *.log
