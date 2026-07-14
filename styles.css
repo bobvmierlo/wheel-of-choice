@@ -1,6 +1,9 @@
 /* ── Base ──────────────────────────────────────────────────────────── */
 * { box-sizing: border-box; margin: 0; padding: 0; }
 
+/* the display rules below must not resurrect [hidden] sections */
+[hidden] { display: none !important; }
+
 :root {
   --bg-1: #1b1035;
   --bg-2: #3b1d5e;
@@ -25,7 +28,7 @@ body {
   min-height: 100vh;
 }
 
-.site-header { text-align: center; padding: 2.2rem 1rem 1rem; }
+.site-header { text-align: center; padding: 2.2rem 1rem 1rem; position: relative; }
 .site-header h1 { font-size: clamp(1.8rem, 4vw, 2.6rem); letter-spacing: 0.5px; }
 .tagline { color: var(--text-dim); margin-top: 0.4rem; }
 
@@ -271,3 +274,106 @@ body {
 }
 
 .site-footer { text-align: center; color: var(--text-dim); font-size: 0.8rem; padding: 2rem 1rem; }
+
+/* ── Account bar ───────────────────────────────────────────────────── */
+.account-bar {
+  position: absolute;
+  top: 0.9rem;
+  right: 1.2rem;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.85rem;
+}
+.account-name { color: var(--text-dim); }
+.btn-small { font-size: 0.78rem; padding: 0.32rem 0.75rem; }
+
+@media (max-width: 720px) {
+  .account-bar { position: static; justify-content: center; margin-bottom: 0.8rem; }
+}
+
+/* ── Gate views (login & onboarding) ───────────────────────────────── */
+.gate { display: flex; justify-content: center; padding: 1.5rem 1.2rem 3rem; }
+.gate-card {
+  background: var(--panel);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  backdrop-filter: blur(8px);
+  padding: 1.6rem;
+  width: 100%;
+  max-width: 460px;
+}
+.onboard-card { max-width: 640px; }
+.gate-card h2 { font-size: 1.25rem; margin-bottom: 0.4rem; }
+.gate-sub { color: var(--text-dim); font-size: 0.9rem; margin-bottom: 1.2rem; }
+.gate-hint { color: var(--text-dim); font-size: 0.82rem; margin-top: 1rem; line-height: 1.5; }
+.gate-divider {
+  display: flex;
+  align-items: center;
+  gap: 0.8rem;
+  color: var(--text-dim);
+  font-size: 0.8rem;
+  margin: 1.3rem 0 0.2rem;
+}
+.gate-divider::before, .gate-divider::after {
+  content: "";
+  flex: 1;
+  border-top: 1px solid var(--panel-border);
+}
+
+.auth-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; }
+.auth-form { display: flex; flex-direction: column; gap: 0.9rem; }
+.auth-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  font-size: 0.85rem;
+  color: var(--text-dim);
+}
+.auth-form input, .join-row input {
+  font: inherit;
+  font-size: 0.95rem;
+  color: var(--text);
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  padding: 0.55rem 0.7rem;
+}
+.auth-form input:focus, .join-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+.form-error { color: #ffb3c2; font-size: 0.85rem; min-height: 1.2em; margin-top: 0.5rem; }
+
+.ob-group { border: 0; margin-bottom: 1.15rem; }
+.ob-group legend { font-size: 0.9rem; margin-bottom: 0.5rem; }
+.ob-group legend small { color: var(--text-dim); font-weight: 400; font-size: 0.78rem; }
+
+.join-row { display: flex; gap: 0.5rem; margin-top: 0.5rem; }
+.join-row input { flex: 1; min-width: 0; text-transform: uppercase; }
+.join-row input::placeholder { text-transform: none; }
+
+/* ── Share modal ───────────────────────────────────────────────────── */
+.share-code-row { display: flex; align-items: center; gap: 0.7rem; margin: 0.4rem 0 0.8rem; }
+.share-code {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: 2px;
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px dashed var(--panel-border);
+  border-radius: 10px;
+  padding: 0.45rem 0.9rem;
+  user-select: all;
+}
+.share-members { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 1.2rem; }
+.share-modal h3 { font-size: 0.95rem; margin: 0.6rem 0 0.3rem; padding-top: 0.8rem; border-top: 1px solid var(--panel-border); }
+.share-leave-row { margin-top: 1rem; }
+.linklike {
+  background: none;
+  border: 0;
+  color: var(--text-dim);
+  font: inherit;
+  font-size: 0.82rem;
+  text-decoration: underline;
+  cursor: pointer;
+  padding: 0;
+}
+.linklike:hover { color: var(--text); }

@@ -10,15 +10,111 @@
 <body>
 
   <header class="site-header">
+    <div class="account-bar" id="account-bar" hidden>
+      <span class="account-name" id="account-name"></span>
+      <button type="button" class="btn btn-ghost btn-small" id="share-btn">🔗 Share</button>
+      <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
+    </div>
     <h1>🌍 Wheel of Wander</h1>
     <p class="tagline">Can't agree on the next trip? Let the wheel decide.</p>
-    <nav class="wheel-tabs" aria-label="Wheel selection">
+    <nav class="wheel-tabs" id="wheel-tabs" aria-label="Wheel selection" hidden>
       <button type="button" class="tab active" data-wheel="holidays">🌍 Holidays</button>
       <button type="button" class="tab" data-wheel="citytrips">🏙️ City trips</button>
     </nav>
   </header>
 
-  <main class="layout">
+  <!-- ── Log in / register ──────────────────────────────────────────── -->
+  <section class="gate" id="auth-view" hidden>
+    <div class="gate-card">
+      <nav class="auth-tabs" aria-label="Log in or create an account">
+        <button type="button" class="tab active" data-mode="login">Log in</button>
+        <button type="button" class="tab" data-mode="register">Create account</button>
+      </nav>
+      <form id="auth-form" class="auth-form">
+        <label>Your name
+          <input type="text" id="auth-name" autocomplete="username" maxlength="30" required
+                 placeholder="e.g. Bob">
+        </label>
+        <label>Password
+          <input type="password" id="auth-password" autocomplete="current-password" minlength="4" required
+                 placeholder="At least 4 characters">
+        </label>
+        <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
+        <p class="form-error" id="auth-error" role="alert"></p>
+      </form>
+      <p class="gate-hint" id="auth-hint">
+        New here? Creating an account takes ten seconds — just a name and a password.
+        Your destinations, favourites and preferences are saved to it, and you can
+        share everything with your partner.
+      </p>
+    </div>
+  </section>
+
+  <!-- ── Onboarding ─────────────────────────────────────────────────── -->
+  <section class="gate" id="onboard-view" hidden>
+    <div class="gate-card onboard-card">
+      <h2>Hi <span id="onboard-name"></span> — let's build your wheels 🎡</h2>
+      <p class="gate-sub">Four quick questions and we'll fill both wheels with destinations
+        that make sense for you. You can tweak everything later.</p>
+
+      <fieldset class="ob-group" data-question="home">
+        <legend>🏠 Where's home?</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn" data-value="northwest">Benelux, Germany &amp; N. France</button>
+          <button type="button" class="seg-btn" data-value="british">UK &amp; Ireland</button>
+          <button type="button" class="seg-btn" data-value="nordic">The Nordics</button>
+          <button type="button" class="seg-btn" data-value="south">Southern Europe</button>
+          <button type="button" class="seg-btn" data-value="central">Central Europe</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="ob-group" data-question="roam">
+        <legend>✈️ How far do you want to roam?</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn" data-value="close">🚗 Keep it close — car &amp; train</button>
+          <button type="button" class="seg-btn active" data-value="europe">✈️ All of Europe</button>
+          <button type="button" class="seg-btn" data-value="anywhere">🌏 Anywhere on the planet</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="ob-group" data-question="vibes" data-multi>
+        <legend>💛 What do you love on a trip? <small>pick any — these become your starting favourites</small></legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn" data-value="nature">🌲 Nature</button>
+          <button type="button" class="seg-btn" data-value="culture">🏛️ Culture &amp; museums</button>
+          <button type="button" class="seg-btn" data-value="food">🍽️ Food</button>
+          <button type="button" class="seg-btn" data-value="beach">🏖️ Beach</button>
+          <button type="button" class="seg-btn" data-value="nightlife">🌃 Nightlife</button>
+          <button type="button" class="seg-btn" data-value="adventure">🧗 Adventure</button>
+          <button type="button" class="seg-btn" data-value="wellness">💆 Wellness</button>
+          <button type="button" class="seg-btn" data-value="winter">⛷️ Snow</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="ob-group" data-question="budget">
+        <legend>💶 What's your budget style?</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn" data-value="low">💶 Budget-friendly</button>
+          <button type="button" class="seg-btn" data-value="mid">💶💶 Mid-range</button>
+          <button type="button" class="seg-btn" data-value="high">💶💶💶 Treat ourselves</button>
+          <button type="button" class="seg-btn active" data-value="mix">🎲 Bit of everything</button>
+        </div>
+      </fieldset>
+
+      <button type="button" class="btn btn-primary" id="onboard-submit">Build our wheels 🎡</button>
+      <p class="form-error" id="onboard-error" role="alert"></p>
+
+      <div class="gate-divider">or</div>
+      <p class="gate-hint">Did your partner already set things up? Skip the questions and
+        join their wheels with the share code:</p>
+      <div class="join-row">
+        <input type="text" id="onboard-code" placeholder="Share code, e.g. ABCD-2345" autocomplete="off">
+        <button type="button" class="btn btn-ghost" id="onboard-join-btn">Join them</button>
+      </div>
+    </div>
+  </section>
+
+  <main class="layout" id="app-view" hidden>
 
     <!-- ── Filters ──────────────────────────────────────────────────── -->
     <aside class="panel filters-panel" aria-label="Trip preferences">
@@ -59,6 +155,10 @@
           <button type="button" class="seg-btn" data-value="nature">Nature</button>
           <button type="button" class="seg-btn" data-value="culture">Culture &amp; museums</button>
           <button type="button" class="seg-btn" data-value="food">Food</button>
+          <button type="button" class="seg-btn" data-value="beach">Beach</button>
+          <button type="button" class="seg-btn" data-value="nightlife">Nightlife</button>
+          <button type="button" class="seg-btn" data-value="adventure">Adventure</button>
+          <button type="button" class="seg-btn" data-value="wellness">Wellness</button>
           <button type="button" class="seg-btn" data-value="winter">Snow</button>
         </div>
       </fieldset>
@@ -111,6 +211,33 @@
     <p class="veto-note" id="veto-note">Each of you gets one veto per round — use it wisely.</p>
   </dialog>
 
+  <!-- ── Share modal ────────────────────────────────────────────────── -->
+  <dialog id="share-modal" class="modal share-modal">
+    <div class="manage-header">
+      <h2>🔗 Share your wheels</h2>
+      <button type="button" class="btn btn-ghost" id="close-share-btn">Close</button>
+    </div>
+    <p class="manage-hint">Give your partner this code. When they create their own account
+      and join with it, you'll both spin the same wheels — destinations, favourites and
+      history stay in sync, while each of you keeps their own filters.</p>
+    <div class="share-code-row">
+      <code class="share-code" id="share-code"></code>
+      <button type="button" class="btn btn-ghost" id="copy-code-btn">📋 Copy</button>
+    </div>
+    <p class="share-members" id="share-members"></p>
+
+    <h3>Join someone else's wheels</h3>
+    <p class="manage-hint">Enter their share code below. You'll leave your current wheels behind.</p>
+    <div class="join-row">
+      <input type="text" id="join-code" placeholder="Share code, e.g. ABCD-2345" autocomplete="off">
+      <button type="button" class="btn btn-ghost" id="join-btn">Join</button>
+    </div>
+    <p class="form-error" id="share-error" role="alert"></p>
+    <p class="share-leave-row">
+      <button type="button" class="linklike" id="leave-btn">Start over with fresh wheels…</button>
+    </p>
+  </dialog>
+
   <!-- ── Manage destinations modal ──────────────────────────────────── -->
   <dialog id="manage-modal" class="modal manage-modal">
     <div class="manage-header">
@@ -121,8 +248,8 @@
     <form id="add-form" class="add-form">
       <h3 id="form-title">Add your own</h3>
       <div class="add-grid">
-        <input type="text" id="add-name" placeholder="Destination name" required maxlength="40">
-        <input type="text" id="add-flag" placeholder="Emoji, e.g. 🏝️" maxlength="8">
+        <input type="text" id="add-name" placeholder="Destination name" required maxlength="60">
+        <input type="text" id="add-flag" placeholder="Emoji, e.g. 🏝️" maxlength="28">
         <select id="add-budget">
           <option value="low">Low budget</option>
           <option value="mid" selected>Mid budget</option>
@@ -139,6 +266,10 @@
         <label><input type="checkbox" value="nature" checked> Nature</label>
         <label><input type="checkbox" value="culture" checked> Culture</label>
         <label><input type="checkbox" value="food"> Food</label>
+        <label><input type="checkbox" value="beach"> Beach</label>
+        <label><input type="checkbox" value="nightlife"> Nightlife</label>
+        <label><input type="checkbox" value="adventure"> Adventure</label>
+        <label><input type="checkbox" value="wellness"> Wellness</label>
         <label><input type="checkbox" value="winter"> Snow</label>
       </div>
       <div class="add-checks" id="add-seasons">
@@ -165,7 +296,7 @@
   </dialog>
 
   <footer class="site-footer">
-    Made for two indecisive travellers ❤️ · destinations &amp; history live on your own server
+    Made for two indecisive travellers ❤️ · your wheels live on your own server, shared with whoever has your code
   </footer>
 
   <script src="app.js"></script>

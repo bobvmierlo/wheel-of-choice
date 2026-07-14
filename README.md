@@ -1,11 +1,24 @@
 # 🌍 Wheel of Wander — holiday picker for two
 
 A tiny webapp that helps couples pick their next holiday destination with a
-wheel-of-fortune spin. A small Flask server stores the shared data; the
-frontend is plain HTML/CSS/JS with no build step.
+wheel-of-fortune spin. A small Flask server stores accounts and shared
+wheels; the frontend is plain HTML/CSS/JS with no build step.
 
 ## Features
 
+- **Accounts** 👤 — registering takes ten seconds: a name and a password,
+  nothing else. Your destinations, favourites and filter preferences are
+  saved to your account.
+- **Onboarding** 🧭 — four quick questions on first login (where's home,
+  how far you'll roam, what you love on a trip, budget style) seed your
+  wheels with destinations that make sense for you: distances are
+  computed relative to *your* home region, far-away places are parked as
+  disabled instead of cluttering the wheel, and the best vibe/budget
+  matches are pre-starred as favourites.
+- **Sharing for couples** 🔗 — every set of wheels has a share code.
+  Your partner registers their own account, enters your code, and from
+  then on you both spin the *same* wheels: destinations, favourites and
+  history stay in sync, while each of you keeps your own filters.
 - **Two wheels** 🌍🏙️ — tabs switch between *Holidays* (whole countries)
   and *City trips* (cities in and around Europe), each with its own
   destination list and history.
@@ -17,7 +30,8 @@ frontend is plain HTML/CSS/JS with no build step.
   - 💶 **Budget**: low / mid / high
   - ✈️ **Distance**: regional (car/train), Europe, or long-haul
   - 👥 **Travel party**: just the two of you, or with friends & family
-  - 🌲 **Vibe**: nature, culture & museums, food, or snow
+  - 🌲 **Vibe**: nature, culture & museums, food, beach, nightlife,
+    adventure, wellness, or snow
   - 📅 **Season**: when you want to travel (destinations are tagged with
     their best months)
 - **Favourites** ⭐ — star the destinations you love (in the manage panel)
@@ -27,13 +41,14 @@ frontend is plain HTML/CSS/JS with no build step.
   add your own.
 - **Veto & respin** 🙅 — each partner gets one veto per round, so a single
   unlucky spin doesn't end the discussion.
-- **Spin history** 📖 — accepted destinations are saved so you can look
-  back at past picks.
+- **Spin history** 📖 — accepted destinations are saved (including who
+  accepted the spin) so you can look back at past picks.
 
-**Storage**: destinations and history are stored on the server in
-`data/db.json` (seeded from `seed-destinations.json` and
-`seed-citytrips.json` on first run), so everyone on your network sees the
-same wheels. Only your personal filter selections stay in the browser.
+**Storage**: everything lives on the server in `data/db.json` — accounts
+(passwords stored as scrypt hashes), login sessions, and each shared
+space's wheels. Only your login token stays in the browser. Databases
+from the pre-account version are migrated automatically: the first
+account to register adopts the existing destinations and history.
 
 ## Running locally
 
@@ -90,20 +105,24 @@ cd /opt/holiday-picker && sudo git pull && sudo systemctl restart holiday-picker
 **Changing the port**: edit the last line of `server.py`, then
 `sudo systemctl restart holiday-picker`.
 
-The service stores destinations and history in
+The service stores accounts, wheels and history in
 `/var/lib/holiday-picker/db.json` (via systemd's `StateDirectory`), so
-your data survives updates and restarts. Note there is no authentication —
-run it on your home network, not the open internet.
+your data survives updates and restarts. Accounts keep casual visitors
+out, but the app still speaks plain HTTP — run it on your home network
+(or behind a reverse proxy with TLS), not naked on the open internet.
 
 ## Customising
 
 - The starting catalogues live in
   [`seed-destinations.json`](seed-destinations.json) (holidays) and
-  [`seed-citytrips.json`](seed-citytrips.json) (city trips) — used only
-  on first run to create `data/db.json`; after that, edit destinations in
-  the app itself (⚙️ Manage destinations). "Regional" is meant as
-  reachable by car or train — adjust to wherever home is for you.
+  [`seed-citytrips.json`](seed-citytrips.json) (city trips) — used to
+  seed each account's wheels during onboarding; after that, edit
+  destinations in the app itself (⚙️ Manage destinations). Each entry's
+  `near` list names the home regions from which it counts as "regional"
+  (reachable by car or train); onboarding recomputes distances from the
+  answers.
 - The tag vocabulary (`budget`, `distance`, `vibes`, `seasons`, `party`)
-  is defined at the top of [`server.py`](server.py).
+  and the onboarding vocabulary (home regions, roam ranges) are defined
+  at the top of [`server.py`](server.py).
 - Colors and styling live in [`styles.css`](styles.css); all frontend
   logic is in [`app.js`](app.js).
