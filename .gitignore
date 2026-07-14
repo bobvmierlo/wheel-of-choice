@@ -1,0 +1,20 @@
+# OS cruft
+.DS_Store
+Thumbs.db
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# In case tooling ever gets added
+node_modules/
+dist/
+
+# Python
+__pycache__/
+venv/
+.venv/
+
+# Local scratch
+*.log

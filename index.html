@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wheel of Wander · Holiday Picker for Two</title>
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌍</text></svg>">
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+
+  <header class="site-header">
+    <h1>🌍 Wheel of Wander</h1>
+    <p class="tagline">Can't agree on the next trip? Let the wheel decide.</p>
+  </header>
+
+  <main class="layout">
+
+    <!-- ── Filters ──────────────────────────────────────────────────── -->
+    <aside class="panel filters-panel" aria-label="Trip preferences">
+      <h2>Trip preferences</h2>
+
+      <fieldset class="filter-group" data-filter="budget">
+        <legend>💶 Budget</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn active" data-value="any">Any</button>
+          <button type="button" class="seg-btn" data-value="low">Low</button>
+          <button type="button" class="seg-btn" data-value="mid">Mid</button>
+          <button type="button" class="seg-btn" data-value="high">High</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="filter-group" data-filter="distance">
+        <legend>✈️ Distance</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn active" data-value="any">Any</button>
+          <button type="button" class="seg-btn" data-value="regional">Regional</button>
+          <button type="button" class="seg-btn" data-value="europe">Europe</button>
+          <button type="button" class="seg-btn" data-value="longhaul">Long-haul</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="filter-group" data-filter="party">
+        <legend>👥 Who's coming?</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn active" data-value="couple">Just us two</button>
+          <button type="button" class="seg-btn" data-value="group">With friends / family</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="filter-group" data-filter="vibe">
+        <legend>🌲 Vibe</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn active" data-value="any">Any</button>
+          <button type="button" class="seg-btn" data-value="nature">Nature</button>
+          <button type="button" class="seg-btn" data-value="culture">Culture &amp; museums</button>
+          <button type="button" class="seg-btn" data-value="food">Food</button>
+          <button type="button" class="seg-btn" data-value="winter">Snow</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="filter-group" data-filter="season">
+        <legend>📅 When?</legend>
+        <div class="segmented">
+          <button type="button" class="seg-btn active" data-value="any">Anytime</button>
+          <button type="button" class="seg-btn" data-value="spring">Spring</button>
+          <button type="button" class="seg-btn" data-value="summer">Summer</button>
+          <button type="button" class="seg-btn" data-value="autumn">Autumn</button>
+          <button type="button" class="seg-btn" data-value="winter">Winter</button>
+        </div>
+      </fieldset>
+
+      <p class="match-count" id="match-count"></p>
+      <button type="button" class="btn btn-ghost" id="manage-btn">⚙️ Manage destinations</button>
+    </aside>
+
+    <!-- ── Wheel ────────────────────────────────────────────────────── -->
+    <section class="wheel-section" aria-label="Destination wheel">
+      <div class="wheel-wrap">
+        <div class="pointer" aria-hidden="true"></div>
+        <canvas id="wheel" width="560" height="560"></canvas>
+        <button type="button" class="spin-btn" id="spin-btn">SPIN</button>
+      </div>
+      <p class="wheel-hint" id="wheel-hint"></p>
+    </section>
+
+    <!-- ── History ──────────────────────────────────────────────────── -->
+    <aside class="panel history-panel" aria-label="Spin history">
+      <h2>📖 Our spin history</h2>
+      <ul id="history-list" class="history-list"></ul>
+      <button type="button" class="btn btn-ghost" id="clear-history-btn" hidden>Clear history</button>
+    </aside>
+
+  </main>
+
+  <!-- ── Result modal ───────────────────────────────────────────────── -->
+  <dialog id="result-modal" class="modal result-modal">
+    <canvas id="confetti" class="confetti" width="480" height="360" aria-hidden="true"></canvas>
+    <p class="result-kicker">Your next holiday is…</p>
+    <p class="result-flag" id="result-flag"></p>
+    <h2 class="result-name" id="result-name"></h2>
+    <p class="result-tags" id="result-tags"></p>
+    <div class="modal-actions">
+      <button type="button" class="btn btn-primary" id="accept-btn">It's a match! 🎉</button>
+      <button type="button" class="btn btn-ghost" id="veto-btn">Veto &amp; respin 🙅</button>
+    </div>
+    <p class="veto-note" id="veto-note">Each of you gets one veto per round — use it wisely.</p>
+  </dialog>
+
+  <!-- ── Manage destinations modal ──────────────────────────────────── -->
+  <dialog id="manage-modal" class="modal manage-modal">
+    <div class="manage-header">
+      <h2>⚙️ Manage destinations</h2>
+      <button type="button" class="btn btn-ghost" id="close-manage-btn">Close</button>
+    </div>
+
+    <form id="add-form" class="add-form">
+      <h3>Add your own</h3>
+      <div class="add-grid">
+        <input type="text" id="add-name" placeholder="Destination name" required maxlength="40">
+        <input type="text" id="add-flag" placeholder="Emoji, e.g. 🏝️" maxlength="8">
+        <select id="add-budget">
+          <option value="low">Low budget</option>
+          <option value="mid" selected>Mid budget</option>
+          <option value="high">High budget</option>
+        </select>
+        <select id="add-distance">
+          <option value="regional">Regional</option>
+          <option value="europe" selected>Europe</option>
+          <option value="longhaul">Long-haul</option>
+        </select>
+      </div>
+      <div class="add-checks" id="add-vibes">
+        <span class="checks-label">Vibes:</span>
+        <label><input type="checkbox" value="nature" checked> Nature</label>
+        <label><input type="checkbox" value="culture" checked> Culture</label>
+        <label><input type="checkbox" value="food"> Food</label>
+        <label><input type="checkbox" value="winter"> Snow</label>
+      </div>
+      <div class="add-checks" id="add-seasons">
+        <span class="checks-label">Best in:</span>
+        <label><input type="checkbox" value="spring" checked> Spring</label>
+        <label><input type="checkbox" value="summer" checked> Summer</label>
+        <label><input type="checkbox" value="autumn" checked> Autumn</label>
+        <label><input type="checkbox" value="winter" checked> Winter</label>
+      </div>
+      <div class="add-checks" id="add-party">
+        <span class="checks-label">Suits:</span>
+        <label><input type="checkbox" value="couple" checked> Just us two</label>
+        <label><input type="checkbox" value="group" checked> Friends / family</label>
+      </div>
+      <button type="submit" class="btn btn-primary">➕ Add destination</button>
+    </form>
+
+    <h3>All destinations</h3>
+    <p class="manage-hint">Untick a destination to keep it off the wheel. ⭐ Starred favourites get a double-width segment — twice the chance to win.</p>
+    <ul id="dest-list" class="dest-list"></ul>
+  </dialog>
+
+  <footer class="site-footer">
+    Made for two indecisive travellers ❤️ · everything is saved in your browser
+  </footer>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
