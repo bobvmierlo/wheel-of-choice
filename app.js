@@ -1,12 +1,18 @@
 /* Wheel of Wander — couples' holiday destination picker.
  *
- * Destinations and spin history are stored on the server (see server.py);
- * only your personal filter selections stay in this browser.
+ * Destinations and spin history live on the server, per shared space
+ * (see server.py). Your account stores your personal filter preferences,
+ * so partners sharing a space can each keep their own filters. Only the
+ * login token is kept in this browser.
  */
 (function () {
   'use strict';
 
-  const VIBE_LABELS = { nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food', winter: '⛷️ snow' };
+  const VIBE_LABELS = {
+    nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food',
+    beach: '🏖️ beach', nightlife: '🌃 nightlife', adventure: '🧗 adventure',
+    wellness: '💆 wellness', winter: '⛷️ snow',
+  };
   const BUDGET_LABELS = { low: '💶 low budget', mid: '💶💶 mid budget', high: '💶💶💶 high budget' };
   const DISTANCE_LABELS = { regional: '🚗 regional', europe: '✈️ Europe', longhaul: '🌏 long-haul' };
   const FAVORITE_WEIGHT = 2; // favourites get a double-width wheel segment
@@ -18,8 +24,12 @@
     '#fb7fb8', '#8aa9ff', '#5eddaf', '#ff9e6d',
   ];
 
+  const TOKEN_KEY = 'wheel-of-wander-token';
+
   // ── State ─────────────────────────────────────────────────────────
   let wheelId = location.hash === '#citytrips' ? 'citytrips' : 'holidays';
+  let token = localStorage.getItem(TOKEN_KEY) || '';
+  let me = null; // { user: {id, name}, prefs, space: {code, onboarded, members} }
 
   const state = {
     filters: defaultFilters(),
@@ -35,23 +45,23 @@
     return { budget: [], distance: [], party: 'couple', vibe: [], season: [] };
   }
 
-  function filtersKey() {
-    return `wheel-of-wander-filters-v2-${wheelId}`;
-  }
-
   function loadFilters() {
     state.filters = defaultFilters();
-    try {
-      const saved = JSON.parse(localStorage.getItem(filtersKey()) || '{}');
-      for (const key of MULTI_FILTERS) {
-        if (Array.isArray(saved[key])) state.filters[key] = saved[key];
-      }
-      if (saved.party === 'couple' || saved.party === 'group') state.filters.party = saved.party;
-    } catch { /* corrupted storage — keep defaults */ }
+    const saved = (me && me.prefs && me.prefs[wheelId]) || {};
+    for (const key of MULTI_FILTERS) {
+      if (Array.isArray(saved[key])) state.filters[key] = [...saved[key]];
+    }
+    if (saved.party === 'couple' || saved.party === 'group') state.filters.party = saved.party;
   }
 
+  let prefsTimer = null;
   function saveFilters() {
-    localStorage.setItem(filtersKey(), JSON.stringify(state.filters));
+    if (!me) return;
+    me.prefs[wheelId] = JSON.parse(JSON.stringify(state.filters));
+    clearTimeout(prefsTimer);
+    prefsTimer = setTimeout(() => {
+      rootApi('/me/prefs', { method: 'PUT', body: JSON.stringify(me.prefs) }).catch(console.error);
+    }, 600);
   }
 
   function startNewRound() {
@@ -60,13 +70,23 @@
   }
 
   // ── Server API ────────────────────────────────────────────────────
-  async function api(path, options = {}) {
-    const res = await fetch(`/api/wheels/${wheelId}${path}`, {
-      headers: { 'Content-Type': 'application/json' },
-      ...options,
-    });
-    if (!res.ok) throw new Error(`Server said ${res.status} for ${path}`);
+  async function rootApi(path, options = {}) {
+    const headers = { 'Content-Type': 'application/json' };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api${path}`, { headers, ...options });
+    if (res.status === 401 && token && !path.startsWith('/auth/')) {
+      forceLogout(); // token expired or revoked — back to the login screen
+    }
+    if (!res.ok) {
+      let message = '';
+      try { message = (await res.json()).error; } catch { /* not JSON */ }
+      throw new Error(message || `Server said ${res.status} for ${path}`);
+    }
     return res.status === 204 ? null : res.json();
+  }
+
+  function api(path, options = {}) {
+    return rootApi(`/wheels/${wheelId}${path}`, options);
   }
 
   async function loadWheelData() {
@@ -99,6 +119,36 @@
   }
 
   // ── Elements ──────────────────────────────────────────────────────
+  const authView = document.getElementById('auth-view');
+  const onboardView = document.getElementById('onboard-view');
+  const appView = document.getElementById('app-view');
+  const wheelTabs = document.getElementById('wheel-tabs');
+  const accountBar = document.getElementById('account-bar');
+  const accountName = document.getElementById('account-name');
+  const shareBtn = document.getElementById('share-btn');
+  const logoutBtn = document.getElementById('logout-btn');
+
+  const authForm = document.getElementById('auth-form');
+  const authName = document.getElementById('auth-name');
+  const authPassword = document.getElementById('auth-password');
+  const authSubmit = document.getElementById('auth-submit');
+  const authError = document.getElementById('auth-error');
+
+  const onboardSubmit = document.getElementById('onboard-submit');
+  const onboardError = document.getElementById('onboard-error');
+  const onboardCode = document.getElementById('onboard-code');
+  const onboardJoinBtn = document.getElementById('onboard-join-btn');
+
+  const shareModal = document.getElementById('share-modal');
+  const closeShareBtn = document.getElementById('close-share-btn');
+  const shareCode = document.getElementById('share-code');
+  const copyCodeBtn = document.getElementById('copy-code-btn');
+  const shareMembers = document.getElementById('share-members');
+  const joinCode = document.getElementById('join-code');
+  const joinBtn = document.getElementById('join-btn');
+  const shareError = document.getElementById('share-error');
+  const leaveBtn = document.getElementById('leave-btn');
+
   const canvas = document.getElementById('wheel');
   const ctx = canvas.getContext('2d');
   const spinBtn = document.getElementById('spin-btn');
@@ -125,18 +175,218 @@
   const historyList = document.getElementById('history-list');
   const clearHistoryBtn = document.getElementById('clear-history-btn');
 
-  // ── Wheel tabs ────────────────────────────────────────────────────
-  document.querySelectorAll('.wheel-tabs .tab').forEach((tab) => {
+  function setActive(btn, on) {
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-pressed', String(on));
+  }
+
+  // ── Views (auth → onboarding → app) ───────────────────────────────
+  function showView(name) {
+    authView.hidden = name !== 'auth';
+    onboardView.hidden = name !== 'onboard';
+    appView.hidden = name !== 'app';
+    wheelTabs.hidden = name !== 'app';
+    accountBar.hidden = name === 'auth';
+  }
+
+  function applyMe() {
+    accountName.textContent = `👤 ${me.user.name}`;
+    shareBtn.hidden = !me.space.onboarded;
+    if (!me.space.onboarded) {
+      document.getElementById('onboard-name').textContent = me.user.name;
+      showView('onboard');
+      return;
+    }
+    showView('app');
+    loadFilters();
+    syncFilterButtons();
+    startNewRound();
+    loadWheelData();
+  }
+
+  async function fetchMe() {
+    try {
+      me = await rootApi('/me');
+      applyMe();
+    } catch (err) {
+      console.error(err);
+      showView('auth');
+      if (token) authError.textContent = '⚠️ Cannot reach the server — is it running?';
+    }
+  }
+
+  function forceLogout() {
+    token = '';
+    me = null;
+    localStorage.removeItem(TOKEN_KEY);
+    clearTimeout(prefsTimer);
+    showView('auth');
+  }
+
+  // ── Auth form ─────────────────────────────────────────────────────
+  let authMode = 'login';
+
+  document.querySelectorAll('.auth-tabs .tab').forEach((tab) => {
     tab.addEventListener('click', () => {
-      if (spinning || tab.dataset.wheel === wheelId) return;
-      wheelId = tab.dataset.wheel;
-      location.hash = wheelId === 'holidays' ? '' : wheelId;
-      syncTabs();
-      loadFilters();
-      syncFilterButtons();
-      startNewRound();
-      loadWheelData();
+      authMode = tab.dataset.mode;
+      document.querySelectorAll('.auth-tabs .tab').forEach((t) => {
+        t.classList.toggle('active', t === tab);
+      });
+      authSubmit.textContent = authMode === 'login' ? 'Log in' : 'Create account';
+      authPassword.autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
+      authError.textContent = '';
     });
+  });
+
+  authForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    authError.textContent = '';
+    authSubmit.disabled = true;
+    try {
+      const result = await rootApi(`/auth/${authMode === 'login' ? 'login' : 'register'}`, {
+        method: 'POST',
+        body: JSON.stringify({ name: authName.value.trim(), password: authPassword.value }),
+      });
+      token = result.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      me = result.me;
+      authPassword.value = '';
+      applyMe();
+    } catch (err) {
+      authError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      authSubmit.disabled = false;
+    }
+  });
+
+  logoutBtn.addEventListener('click', async () => {
+    try { await rootApi('/auth/logout', { method: 'POST' }); } catch { /* logging out anyway */ }
+    forceLogout();
+  });
+
+  // ── Onboarding ────────────────────────────────────────────────────
+  const onboardAnswers = { home: null, roam: 'europe', vibes: [], budget: 'mix' };
+
+  document.querySelectorAll('#onboard-view .ob-group').forEach((group) => {
+    const question = group.dataset.question;
+    const multi = group.hasAttribute('data-multi');
+    group.addEventListener('click', (e) => {
+      const btn = e.target.closest('.seg-btn');
+      if (!btn) return;
+      const value = btn.dataset.value;
+      if (multi) {
+        const set = new Set(onboardAnswers[question]);
+        set.has(value) ? set.delete(value) : set.add(value);
+        onboardAnswers[question] = [...set];
+        setActive(btn, set.has(value));
+      } else {
+        onboardAnswers[question] = value;
+        group.querySelectorAll('.seg-btn').forEach((b) => setActive(b, b === btn));
+      }
+      onboardError.textContent = '';
+    });
+  });
+
+  onboardSubmit.addEventListener('click', async () => {
+    if (!onboardAnswers.home) {
+      onboardError.textContent = '⚠️ Tell us where home is first 🙂';
+      return;
+    }
+    onboardSubmit.disabled = true;
+    try {
+      me = await rootApi('/onboarding', { method: 'POST', body: JSON.stringify(onboardAnswers) });
+      applyMe();
+    } catch (err) {
+      onboardError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      onboardSubmit.disabled = false;
+    }
+  });
+
+  async function joinWithCode(code, errorEl) {
+    errorEl.textContent = '';
+    if (!code.trim()) {
+      errorEl.textContent = '⚠️ Enter a share code first';
+      return;
+    }
+    try {
+      me = await rootApi('/space/join', { method: 'POST', body: JSON.stringify({ code }) });
+      if (shareModal.open) shareModal.close();
+      applyMe();
+    } catch (err) {
+      errorEl.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  onboardJoinBtn.addEventListener('click', () => joinWithCode(onboardCode.value, onboardError));
+  onboardCode.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); onboardJoinBtn.click(); }
+  });
+
+  // ── Share modal ───────────────────────────────────────────────────
+  shareBtn.addEventListener('click', () => {
+    shareCode.textContent = me.space.code;
+    const others = me.space.members.filter((n) => n !== me.user.name);
+    shareMembers.textContent = others.length
+      ? `Travelling together: ${me.space.members.join(', ')} 💑`
+      : 'Nobody has joined yet — send the code to your partner!';
+    shareError.textContent = '';
+    joinCode.value = '';
+    copyCodeBtn.textContent = '📋 Copy';
+    shareModal.showModal();
+  });
+  closeShareBtn.addEventListener('click', () => shareModal.close());
+
+  copyCodeBtn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(me.space.code);
+      copyCodeBtn.textContent = '✅ Copied';
+    } catch {
+      copyCodeBtn.textContent = '⚠️ Copy failed';
+    }
+  });
+
+  joinBtn.addEventListener('click', () => joinWithCode(joinCode.value, shareError));
+  joinCode.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); joinBtn.click(); }
+  });
+
+  leaveBtn.addEventListener('click', async () => {
+    const alone = me.space.members.length <= 1;
+    const msg = alone
+      ? 'Start over with fresh wheels? Your current destinations and history will be gone for good.'
+      : 'Start over with fresh wheels? You\'ll leave the shared wheels — your partner keeps them.';
+    if (!confirm(msg)) return;
+    try {
+      me = await rootApi('/space/leave', { method: 'POST' });
+      shareModal.close();
+      applyMe();
+    } catch (err) {
+      shareError.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  // ── Wheel tabs ────────────────────────────────────────────────────
+  function switchWheel(target) {
+    if (spinning || target === wheelId) return;
+    wheelId = target;
+    if (location.hash !== (wheelId === 'holidays' ? '' : `#${wheelId}`)) {
+      history.replaceState(null, '', wheelId === 'holidays' ? location.pathname : `#${wheelId}`);
+    }
+    syncTabs();
+    loadFilters();
+    syncFilterButtons();
+    startNewRound();
+    loadWheelData();
+  }
+
+  document.querySelectorAll('.wheel-tabs .tab').forEach((tab) => {
+    tab.addEventListener('click', () => switchWheel(tab.dataset.wheel));
+  });
+
+  window.addEventListener('hashchange', () => {
+    // keep the back/forward buttons working for the two wheels
+    switchWheel(location.hash === '#citytrips' ? 'citytrips' : 'holidays');
   });
 
   function syncTabs() {
@@ -314,6 +564,12 @@
     launchConfetti();
   }
 
+  // Closing the dialog any other way (Esc) means "let's decide later":
+  // no history entry, no veto spent.
+  resultModal.addEventListener('close', () => {
+    pendingResult = null;
+  });
+
   acceptBtn.addEventListener('click', async () => {
     const result = pendingResult;
     pendingResult = null;
@@ -417,11 +673,11 @@
       const key = group.dataset.filter;
       group.querySelectorAll('.seg-btn').forEach((b) => {
         if (key === 'party') {
-          b.classList.toggle('active', b.dataset.value === state.filters.party);
+          setActive(b, b.dataset.value === state.filters.party);
         } else if (b.dataset.value === 'any') {
-          b.classList.toggle('active', state.filters[key].length === 0);
+          setActive(b, state.filters[key].length === 0);
         } else {
-          b.classList.toggle('active', state.filters[key].includes(b.dataset.value));
+          setActive(b, state.filters[key].includes(b.dataset.value));
         }
       });
     });
@@ -457,8 +713,14 @@
       checkbox.checked = d.enabled;
       checkbox.title = 'On the wheel?';
       checkbox.addEventListener('change', async () => {
-        await patchDestination(d.id, { enabled: checkbox.checked }).catch(console.error);
-        li.classList.toggle('disabled', !checkbox.checked);
+        try {
+          const updated = await patchDestination(d.id, { enabled: checkbox.checked });
+          d.enabled = updated.enabled;
+          li.classList.toggle('disabled', !d.enabled);
+        } catch (err) {
+          console.error(err);
+          checkbox.checked = d.enabled; // save failed — revert the tick
+        }
       });
 
       const star = document.createElement('button');
@@ -595,12 +857,14 @@
       const when = document.createElement('span');
       when.className = 'when';
       when.textContent = new Date(item.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
+      if (item.by) when.title = `Picked by ${item.by}`;
       li.append(name, when);
       historyList.append(li);
     }
   }
 
   clearHistoryBtn.addEventListener('click', async () => {
+    if (!confirm('Clear the whole spin history? This clears it for both of you.')) return;
     try {
       await api('/history', { method: 'DELETE' });
       state.history = [];
@@ -615,8 +879,10 @@
     currentSegments = eligibleDestinations();
     const n = currentSegments.length;
     const favs = currentSegments.filter(isFavorite).length;
-    matchCount.textContent = (n === 1 ? '1 destination on the wheel' : `${n} destinations on the wheel`) +
-      (favs > 0 ? ` · ⭐ ${favs} favourite${favs === 1 ? '' : 's'} with double chance` : '');
+    matchCount.textContent = n === 0
+      ? 'No matches — loosen a filter or two'
+      : (n === 1 ? '1 destination on the wheel' : `${n} destinations on the wheel`) +
+        (favs > 0 ? ` · ⭐ ${favs} favourite${favs === 1 ? '' : 's'} with double chance` : '');
     spinBtn.disabled = n === 0 || spinning;
     drawWheel();
   }
@@ -625,9 +891,9 @@
 
   // ── Init ──────────────────────────────────────────────────────────
   syncTabs();
-  loadFilters();
-  syncFilterButtons();
-  renderHistory();
-  refresh();
-  loadWheelData();
+  if (token) {
+    fetchMe();
+  } else {
+    showView('auth');
+  }
 })();
