@@ -47,8 +47,9 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions, and each shared
 space's wheels. Only your login token stays in the browser. Databases
-from the pre-account version are migrated automatically: the first
-account to register adopts the existing destinations and history.
+from the pre-account version are migrated automatically: the onboarding
+screen offers your old destinations and history to the first account
+("keep them"), or you can answer the questions and start fresh.
 
 ## Running locally
 

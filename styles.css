@@ -343,6 +343,16 @@ body {
 
 .form-error { color: #ffb3c2; font-size: 0.85rem; min-height: 1.2em; margin-top: 0.5rem; }
 
+.legacy-banner {
+  background: rgba(255, 184, 77, 0.08);
+  border: 1px solid rgba(255, 184, 77, 0.35);
+  border-radius: 12px;
+  padding: 0.9rem;
+  margin-bottom: 1.15rem;
+}
+.legacy-banner p { font-size: 0.88rem; margin-bottom: 0.7rem; }
+.legacy-banner .gate-divider { margin: 1rem 0 0; }
+
 .ob-group { border: 0; margin-bottom: 1.15rem; }
 .ob-group legend { font-size: 0.9rem; margin-bottom: 0.5rem; }
 .ob-group legend small { color: var(--text-dim); font-weight: 400; font-size: 0.78rem; }
