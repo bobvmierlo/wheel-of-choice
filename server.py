@@ -185,6 +185,13 @@ def space_members(db, space_id):
     return sorted(u["name"] for u in db["users"].values() if u["space"] == space_id)
 
 
+def unclaimed_space(db):
+    """The space nobody belongs to — exists only after migrating a
+    pre-account database, and holds that household's old wheels."""
+    claimed = {u["space"] for u in db["users"].values()}
+    return next((s for s in db["spaces"].values() if s["id"] not in claimed), None)
+
+
 def me_payload(db, user):
     space = db["spaces"][user["space"]]
     return {
@@ -195,6 +202,8 @@ def me_payload(db, user):
             "onboarded": space["onboarded"],
             "members": space_members(db, space["id"]),
         },
+        # lets the onboarding screen offer "keep your old wheels"
+        "legacy_available": unclaimed_space(db) is not None,
     }
 
 
@@ -225,13 +234,8 @@ def register():
         db = load_db()
         if any(u["name"].lower() == name.lower() for u in db["users"].values()):
             abort(400, description="that name is already taken — log in instead?")
-        # An unclaimed space exists only after migrating a pre-account
-        # database; the first account to register adopts it (data intact).
-        claimed = {u["space"] for u in db["users"].values()}
-        space = next((s for s in db["spaces"].values() if s["id"] not in claimed), None)
-        if space is None:
-            space = new_space()
-            db["spaces"][space["id"]] = space
+        space = new_space()
+        db["spaces"][space["id"]] = space
         user = {
             "id": "u-" + uuid.uuid4().hex[:10],
             "name": name,
@@ -306,6 +310,22 @@ def join_space():
             abort(404, description="no wheels found for that code — check it with your partner")
         if target["id"] == user["space"]:
             abort(400, description="you're already sharing these wheels")
+        old = user["space"]
+        user["space"] = target["id"]
+        drop_space_if_empty(db, old)
+        save_db(db)
+        return jsonify(me_payload(db, user))
+
+
+@app.post("/api/space/claim")
+def claim_space():
+    """Adopt the wheels migrated from a pre-account database."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        target = unclaimed_space(db)
+        if target is None:
+            abort(404, description="no unclaimed wheels found — they may already be claimed")
         old = user["space"]
         user["space"] = target["id"]
         drop_space_if_empty(db, old)

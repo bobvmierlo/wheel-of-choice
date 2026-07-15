@@ -138,6 +138,8 @@
   const onboardError = document.getElementById('onboard-error');
   const onboardCode = document.getElementById('onboard-code');
   const onboardJoinBtn = document.getElementById('onboard-join-btn');
+  const legacyBanner = document.getElementById('legacy-banner');
+  const claimBtn = document.getElementById('claim-btn');
 
   const shareModal = document.getElementById('share-modal');
   const closeShareBtn = document.getElementById('close-share-btn');
@@ -194,6 +196,7 @@
     shareBtn.hidden = !me.space.onboarded;
     if (!me.space.onboarded) {
       document.getElementById('onboard-name').textContent = me.user.name;
+      legacyBanner.hidden = !me.legacy_available;
       showView('onboard');
       return;
     }
@@ -317,6 +320,18 @@
       errorEl.textContent = `⚠️ ${err.message}`;
     }
   }
+
+  claimBtn.addEventListener('click', async () => {
+    claimBtn.disabled = true;
+    try {
+      me = await rootApi('/space/claim', { method: 'POST' });
+      applyMe();
+    } catch (err) {
+      onboardError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      claimBtn.disabled = false;
+    }
+  });
 
   onboardJoinBtn.addEventListener('click', () => joinWithCode(onboardCode.value, onboardError));
   onboardCode.addEventListener('keydown', (e) => {
