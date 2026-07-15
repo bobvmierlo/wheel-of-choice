@@ -35,11 +35,16 @@
     filters: defaultFilters(),
     destinations: [],
     history: [],
-    // Round state: each partner gets one veto per round.
-    vetoedIds: [],
-    vetoesLeft: 2,
+    // The round lives on the server so both partners see the same thing:
+    // every member gets exactly one veto per round, and an accepted pick
+    // waits for the partner's thumbs-up before it lands in the history.
+    round: emptyRound(),
     editingId: null,
   };
+
+  function emptyRound() {
+    return { vetoed_ids: [], my_veto_used: false, vetoes_used: 0, members: 1, pending: null };
+  }
 
   function defaultFilters() {
     return { budget: [], distance: [], party: 'couple', vibe: [], season: [] };
@@ -64,9 +69,24 @@
     }, 600);
   }
 
-  function startNewRound() {
-    state.vetoedIds = [];
-    state.vetoesLeft = 2;
+  function partnerNames() {
+    const others = me.space.members.filter((n) => n !== me.user.name);
+    return others.length ? others.join(' & ') : 'your partner';
+  }
+
+  // Merge fresh round state from the server; when the partner acted on my
+  // pending pick in the meantime, say so in the hint.
+  function applyRound(round) {
+    const before = state.round;
+    state.round = round;
+    if (JSON.stringify(before) === JSON.stringify(round)) return;
+    if (before.pending && before.pending.mine && !round.pending) {
+      wheelHint.textContent = round.vetoed_ids.includes(before.pending.dest_id)
+        ? `${before.pending.flag} ${before.pending.name} got vetoed 🙅 — spin again!`
+        : `${before.pending.flag} ${before.pending.name} it is — time to book! 🧳`;
+    }
+    renderPending();
+    refresh();
   }
 
   // ── Server API ────────────────────────────────────────────────────
@@ -91,17 +111,22 @@
 
   async function loadWheelData() {
     try {
-      const [destinations, history] = await Promise.all([api('/destinations'), api('/history')]);
+      const [destinations, history, round] = await Promise.all([
+        api('/destinations'), api('/history'), api('/round'),
+      ]);
       state.destinations = destinations;
       state.history = history;
+      state.round = round;
       wheelHint.textContent = '';
     } catch (err) {
       console.error(err);
       state.destinations = [];
       state.history = [];
+      state.round = emptyRound();
       wheelHint.textContent = '⚠️ Cannot reach the server — is it running? (python3 server.py)';
     }
     renderHistory();
+    renderPending();
     refresh();
   }
 
@@ -109,7 +134,7 @@
     const f = state.filters;
     return state.destinations.filter((d) =>
       d.enabled &&
-      !state.vetoedIds.includes(d.id) &&
+      !state.round.vetoed_ids.includes(d.id) &&
       (f.budget.length === 0 || f.budget.includes(d.budget)) &&
       (f.distance.length === 0 || f.distance.includes(d.distance)) &&
       d.party.includes(f.party) &&
@@ -126,6 +151,7 @@
   const accountBar = document.getElementById('account-bar');
   const accountName = document.getElementById('account-name');
   const shareBtn = document.getElementById('share-btn');
+  const adminBtn = document.getElementById('admin-btn');
   const logoutBtn = document.getElementById('logout-btn');
 
   const authForm = document.getElementById('auth-form');
@@ -165,6 +191,18 @@
   const vetoBtn = document.getElementById('veto-btn');
   const vetoNote = document.getElementById('veto-note');
 
+  const pendingBanner = document.getElementById('pending-banner');
+  const pendingText = document.getElementById('pending-text');
+  const pendingActions = document.getElementById('pending-actions');
+  const pendingAcceptBtn = document.getElementById('pending-accept-btn');
+  const pendingVetoBtn = document.getElementById('pending-veto-btn');
+
+  const adminModal = document.getElementById('admin-modal');
+  const closeAdminBtn = document.getElementById('close-admin-btn');
+  const adminUserList = document.getElementById('admin-user-list');
+  const adminError = document.getElementById('admin-error');
+  const adminUpdateBtn = document.getElementById('admin-update-btn');
+
   const manageModal = document.getElementById('manage-modal');
   const manageBtn = document.getElementById('manage-btn');
   const closeManageBtn = document.getElementById('close-manage-btn');
@@ -194,6 +232,7 @@
   function applyMe() {
     accountName.textContent = `👤 ${me.user.name}`;
     shareBtn.hidden = !me.space.onboarded;
+    adminBtn.hidden = !me.user.admin;
     if (!me.space.onboarded) {
       document.getElementById('onboard-name').textContent = me.user.name;
       legacyBanner.hidden = !me.legacy_available;
@@ -203,7 +242,7 @@
     showView('app');
     loadFilters();
     syncFilterButtons();
-    startNewRound();
+    state.round = emptyRound(); // the real round arrives with the wheel data
     loadWheelData();
   }
 
@@ -381,6 +420,90 @@
     }
   });
 
+  // ── Admin modal ───────────────────────────────────────────────────
+  adminBtn.addEventListener('click', async () => {
+    adminError.textContent = '';
+    adminUserList.innerHTML = '';
+    adminModal.showModal();
+    try {
+      renderAdminUsers(await rootApi('/admin/users'));
+    } catch (err) {
+      adminError.textContent = `⚠️ ${err.message}`;
+    }
+  });
+  closeAdminBtn.addEventListener('click', () => adminModal.close());
+
+  async function adminAction(request) {
+    adminError.textContent = '';
+    try {
+      renderAdminUsers(await request);
+    } catch (err) {
+      adminError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  function adminActionBtn(label, title, onClick) {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'btn btn-ghost btn-small';
+    btn.textContent = label;
+    btn.title = title;
+    btn.addEventListener('click', onClick);
+    return btn;
+  }
+
+  function renderAdminUsers(users) {
+    adminUserList.innerHTML = '';
+    for (const u of users) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'dest-name';
+      name.textContent = `${u.admin ? '🛡️' : '👤'} ${u.name}${u.id === me.user.id ? ' (you)' : ''}`;
+      const meta = document.createElement('span');
+      meta.className = 'dest-meta';
+      meta.textContent = u.sharing_with.length
+        ? `shares wheels with ${u.sharing_with.join(', ')}`
+        : 'own wheels';
+      li.append(name, meta);
+
+      if (u.id !== me.user.id) {
+        li.append(adminActionBtn(
+          u.admin ? 'Remove admin' : 'Make admin',
+          u.admin ? 'Take away admin rights' : 'Give admin rights',
+          () => adminAction(rootApi(`/admin/users/${u.id}`, {
+            method: 'PUT',
+            body: JSON.stringify({ admin: !u.admin }),
+          }))
+        ));
+        if (u.sharing_with.length) {
+          li.append(adminActionBtn('Unshare', 'Move them out of the shared wheels', () => {
+            if (!confirm(`Pull ${u.name} out of the wheels they share with ${u.sharing_with.join(', ')}? They keep their account and get fresh wheels of their own.`)) return;
+            adminAction(rootApi(`/admin/users/${u.id}/unshare`, { method: 'POST' }));
+          }));
+        }
+        li.append(adminActionBtn('✕ Delete', 'Delete this account for good', () => {
+          if (!confirm(`Delete ${u.name}'s account for good? Wheels they share with others stay with the others.`)) return;
+          adminAction(rootApi(`/admin/users/${u.id}`, { method: 'DELETE' }));
+        }));
+      }
+      adminUserList.append(li);
+    }
+  }
+
+  adminUpdateBtn.addEventListener('click', async () => {
+    if (!confirm('Pull the latest version from git and restart the server? Everyone is briefly disconnected.')) return;
+    adminError.textContent = '';
+    adminUpdateBtn.disabled = true;
+    try {
+      await rootApi('/admin/update', { method: 'POST' });
+      adminError.textContent = '✅ Update requested — the server pulls the latest version and restarts in a moment.';
+    } catch (err) {
+      adminError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      adminUpdateBtn.disabled = false;
+    }
+  });
+
   // ── Wheel tabs ────────────────────────────────────────────────────
   function switchWheel(target) {
     if (spinning || target === wheelId) return;
@@ -391,7 +514,7 @@
     syncTabs();
     loadFilters();
     syncFilterButtons();
-    startNewRound();
+    state.round = emptyRound();
     loadWheelData();
   }
 
@@ -571,10 +694,10 @@
     resultFlag.textContent = destination.flag;
     resultName.textContent = destination.name;
     resultTags.textContent = describe(destination);
-    vetoBtn.disabled = state.vetoesLeft === 0;
-    vetoNote.textContent = state.vetoesLeft > 0
-      ? `Vetoes left this round: ${state.vetoesLeft} — each of you gets one.`
-      : 'No vetoes left — the wheel has spoken!';
+    vetoBtn.disabled = state.round.my_veto_used;
+    vetoNote.textContent = state.round.my_veto_used
+      ? 'You\'ve already used your veto this round — the wheel has spoken!'
+      : 'Each of you gets one veto per round — yours is still up your sleeve.';
     resultModal.showModal();
     launchConfetti();
   }
@@ -589,36 +712,110 @@
     const result = pendingResult;
     pendingResult = null;
     resultModal.close();
-    startNewRound();
-    if (result) {
-      wheelHint.textContent = `${result.flag} ${result.name} it is — time to book! 🧳`;
-      try {
-        state.history = await api('/history', {
-          method: 'POST',
-          body: JSON.stringify({ name: result.name, flag: result.flag }),
-        });
-      } catch (err) {
-        console.error(err);
-        wheelHint.textContent = '⚠️ Could not save to history — is the server still running?';
+    if (!result) { refresh(); return; }
+    try {
+      const res = await api('/round/pick', {
+        method: 'POST',
+        body: JSON.stringify({ dest_id: result.id }),
+      });
+      applyRound(res.round);
+      if (res.final) {
+        state.history = res.history;
+        renderHistory();
+        wheelHint.textContent = `${result.flag} ${result.name} it is — time to book! 🧳`;
+      } else {
+        wheelHint.textContent = `Waiting for ${partnerNames()} to okay ${result.flag} ${result.name} — they can still veto ✋`;
       }
-      renderHistory();
+    } catch (err) {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
     }
     refresh();
   });
 
-  vetoBtn.addEventListener('click', () => {
-    if (!pendingResult || state.vetoesLeft === 0) return;
-    state.vetoesLeft -= 1;
-    state.vetoedIds.push(pendingResult.id);
+  vetoBtn.addEventListener('click', async () => {
+    if (!pendingResult || state.round.my_veto_used) return;
+    const result = pendingResult;
     pendingResult = null;
     resultModal.close();
-    refresh();
+    try {
+      applyRound(await api('/round/veto', {
+        method: 'POST',
+        body: JSON.stringify({ dest_id: result.id }),
+      }));
+    } catch (err) {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
+      refresh();
+      return;
+    }
     if (currentSegments.length > 0) {
       spin();
     } else {
       wheelHint.textContent = 'Nothing left after that veto — loosen the filters or start over.';
     }
   });
+
+  // ── Pending pick banner (the partner spun — accept or veto) ──────
+  function renderPending() {
+    const p = state.round.pending;
+    pendingBanner.hidden = !p;
+    if (!p) return;
+    if (p.mine) {
+      pendingText.textContent = `⏳ You picked ${p.flag} ${p.name} — waiting for ${partnerNames()} to give it a thumbs-up.`;
+      pendingActions.hidden = true;
+    } else {
+      pendingText.textContent = `🎡 ${p.by_name} spun ${p.flag} ${p.name}! Are you in — or is this your veto?`;
+      pendingActions.hidden = false;
+      pendingVetoBtn.disabled = state.round.my_veto_used;
+      pendingVetoBtn.title = state.round.my_veto_used
+        ? 'You already used your veto this round' : '';
+    }
+  }
+
+  pendingAcceptBtn.addEventListener('click', async () => {
+    const p = state.round.pending;
+    if (!p) return;
+    try {
+      const res = await api('/round/confirm', { method: 'POST' });
+      state.history = res.history;
+      renderHistory();
+      wheelHint.textContent = `${p.flag} ${p.name} it is — time to book! 🧳`;
+      applyRound(res.round);
+    } catch (err) {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  pendingVetoBtn.addEventListener('click', async () => {
+    const p = state.round.pending;
+    if (!p || state.round.my_veto_used) return;
+    try {
+      applyRound(await api('/round/veto', {
+        method: 'POST',
+        body: JSON.stringify({ dest_id: p.dest_id }),
+      }));
+      wheelHint.textContent = `You vetoed ${p.flag} ${p.name} 🙅 — give it another spin!`;
+    } catch (err) {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  // The partner's device finds out about vetoes, pending picks and fresh
+  // history by polling — plenty for two people deciding on a sofa.
+  setInterval(async () => {
+    if (!me || !me.space.onboarded || appView.hidden || document.hidden || spinning) return;
+    try {
+      const [round, history] = await Promise.all([api('/round'), api('/history')]);
+      if (JSON.stringify(history) !== JSON.stringify(state.history)) {
+        state.history = history;
+        renderHistory();
+      }
+      applyRound(round);
+    } catch { /* transient — the next poll retries */ }
+  }, 5000);
 
   // ── Confetti ──────────────────────────────────────────────────────
   const confettiCanvas = document.getElementById('confetti');
@@ -676,7 +873,6 @@
         set.has(value) ? set.delete(value) : set.add(value);
         state.filters[key] = [...set];
       }
-      startNewRound(); // changing preferences resets vetoes
       saveFilters();
       syncFilterButtons();
       refresh();
@@ -884,6 +1080,7 @@
       await api('/history', { method: 'DELETE' });
       state.history = [];
       renderHistory();
+      applyRound(await api('/round')); // clearing history also starts a fresh round
     } catch (err) {
       console.error(err);
     }

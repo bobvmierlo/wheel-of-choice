@@ -39,10 +39,16 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
 - **Manage the destination list** ⚙️ — untick destinations to keep them
   off the wheel, ✏️ edit any destination's name and tags, delete them, or
   add your own.
-- **Veto & respin** 🙅 — each partner gets one veto per round, so a single
-  unlucky spin doesn't end the discussion.
+- **Veto & respin** 🙅 — every member gets exactly one veto per round
+  (tracked on the server, so no sneaky double vetoes), and a spin one
+  partner accepts waits for the other's thumbs-up: their devices show the
+  pick with an accept-or-veto banner before it counts. A round closes when
+  a pick makes it into the history.
 - **Spin history** 📖 — accepted destinations are saved (including who
-  accepted the spin) so you can look back at past picks.
+  spun them) so you can look back at past picks.
+- **Admin** 🛠️ — the first account ever registered runs the place: it can
+  make other users admin, pull someone out of shared wheels, delete
+  accounts, and trigger a server self-update (see below).
 
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions, and each shared
@@ -102,6 +108,20 @@ unprivileged dynamic user with a read-only view of the system.
 ```bash
 cd /opt/holiday-picker && sudo git pull && sudo systemctl restart holiday-picker
 ```
+
+Or let the admin do it from the app: install the updater units once —
+
+```bash
+sudo cp /opt/holiday-picker/deploy/holiday-picker-update.service \
+        /opt/holiday-picker/deploy/holiday-picker-update.path /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now holiday-picker-update.path
+```
+
+— and the 🛠️ Admin panel's "Update & restart server" button does the
+pull-and-restart for you. (The app itself runs sandboxed without sudo;
+the button drops a flag file in the state directory, which the path unit
+watches and acts on as root.)
 
 **Changing the port**: edit the last line of `server.py`, then
 `sudo systemctl restart holiday-picker`.

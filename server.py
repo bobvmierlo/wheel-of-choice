@@ -12,6 +12,17 @@ There are two wheels per space, each with its own list and history:
   - "holidays"  : whole-country holiday destinations
   - "citytrips" : city trips in and around Europe
 
+Each wheel also carries the current *round*: which destinations have been
+vetoed (every member gets exactly one veto per round, tracked by user id)
+and the pick that is waiting for the partner's thumbs-up. A pick only
+lands in the history once everyone who could still veto has had their
+say. The round is kept on the server so both partners' devices see the
+same thing.
+
+The first account ever registered becomes the admin; admins can promote
+other users, delete accounts, and pull a user out of a shared space (see
+the /api/admin endpoints).
+
 Storage: data/db.json next to this file by default; override the
 directory with the HOLIDAY_DATA_DIR environment variable (the systemd
 unit sets it to /var/lib/holiday-picker). Old single-household databases
@@ -38,6 +49,7 @@ from werkzeug.exceptions import HTTPException
 ROOT = Path(__file__).parent.resolve()
 DATA_DIR = Path(os.environ.get("HOLIDAY_DATA_DIR", str(ROOT / "data")))
 DB_FILE = DATA_DIR / "db.json"
+UPDATE_FLAG = DATA_DIR / "update-requested"
 
 WHEEL_SEEDS = {
     "holidays": ROOT / "seed-destinations.json",
@@ -105,12 +117,22 @@ def new_space(onboarded=False, wheels=None):
     }
 
 
+def ensure_admin(db):
+    """The first account ever registered is the admin — backfill databases
+    from before admins existed. Later admins are appointed by an admin."""
+    users = list(db["users"].values())
+    if users and not any(u.get("admin") for u in users):
+        min(users, key=lambda u: u.get("created", ""))["admin"] = True
+        save_db(db)
+    return db
+
+
 def load_db():
     if not DB_FILE.exists():
         return {"version": 2, "users": {}, "sessions": {}, "spaces": {}}
     db = json.loads(DB_FILE.read_text(encoding="utf-8"))
     if "users" in db:
-        return db
+        return ensure_admin(db)
     # Migrate v1 (single shared household, no accounts). The old wheels
     # become an unclaimed space that the first registered account adopts.
     wheels = db.get("wheels")
@@ -195,7 +217,7 @@ def unclaimed_space(db):
 def me_payload(db, user):
     space = db["spaces"][user["space"]]
     return {
-        "user": {"id": user["id"], "name": user["name"]},
+        "user": {"id": user["id"], "name": user["name"], "admin": bool(user.get("admin"))},
         "prefs": user["prefs"],
         "space": {
             "code": space["code"],
@@ -242,6 +264,7 @@ def register():
             "salt": secrets.token_hex(16),
             "space": space["id"],
             "prefs": default_prefs(),
+            "admin": not db["users"],  # the very first account runs the place
             "created": datetime.now(timezone.utc).isoformat(),
         }
         user["password"] = hash_password(password, user["salt"])
@@ -346,6 +369,107 @@ def leave_space():
         drop_space_if_empty(db, old)
         save_db(db)
         return jsonify(me_payload(db, user))
+
+
+# ── Admin ────────────────────────────────────────────────────────────
+def require_admin(db):
+    user = current_user(db)
+    if not user.get("admin"):
+        abort(403, description="admins only")
+    return user
+
+
+def admin_user_list(db):
+    users = sorted(db["users"].values(), key=lambda u: u.get("created", ""))
+    return [{
+        "id": u["id"],
+        "name": u["name"],
+        "admin": bool(u.get("admin")),
+        "created": u.get("created"),
+        "sharing_with": sorted(
+            v["name"] for v in db["users"].values()
+            if v["space"] == u["space"] and v["id"] != u["id"]
+        ),
+    } for u in users]
+
+
+@app.get("/api/admin/users")
+def admin_users():
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.put("/api/admin/users/<user_id>")
+def admin_set_admin(user_id):
+    payload = request.get_json(force=True, silent=True) or {}
+    make_admin = bool(payload.get("admin"))
+    with _lock:
+        db = load_db()
+        admin = require_admin(db)
+        target = db["users"].get(user_id)
+        if target is None:
+            abort(404, description="no such user")
+        if target["id"] == admin["id"] and not make_admin:
+            abort(400, description="you can't take away your own admin rights")
+        target["admin"] = make_admin
+        save_db(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.post("/api/admin/users/<user_id>/unshare")
+def admin_unshare(user_id):
+    """Pull a user out of a shared space: they move to a fresh space of
+    their own (like /space/leave), the others keep the wheels."""
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        target = db["users"].get(user_id)
+        if target is None:
+            abort(404, description="no such user")
+        if not any(u["space"] == target["space"] and u["id"] != target["id"]
+                   for u in db["users"].values()):
+            abort(400, description=f"{target['name']} isn't sharing wheels with anyone")
+        space = new_space()
+        db["spaces"][space["id"]] = space
+        target["space"] = space["id"]
+        save_db(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.delete("/api/admin/users/<user_id>")
+def admin_delete_user(user_id):
+    with _lock:
+        db = load_db()
+        admin = require_admin(db)
+        if user_id == admin["id"]:
+            abort(400, description="you can't delete your own account")
+        target = db["users"].pop(user_id, None)
+        if target is None:
+            abort(404, description="no such user")
+        db["sessions"] = {t: s for t, s in db["sessions"].items() if s["user"] != user_id}
+        drop_space_if_empty(db, target["space"])
+        save_db(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.post("/api/admin/update")
+def admin_update():
+    """Ask the host to update to the latest version. The Flask process is
+    sandboxed and unprivileged (see deploy/holiday-picker.service), so it
+    can't run `sudo git pull` itself — it drops a flag file in the state
+    directory instead, and the root-level holiday-picker-update.path unit
+    (see deploy/) picks it up, pulls, and restarts this service."""
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        try:
+            DATA_DIR.mkdir(parents=True, exist_ok=True)
+            UPDATE_FLAG.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
+        except OSError:
+            abort(500, description="could not write the update request")
+    return jsonify({"requested": True}), 202
 
 
 # ── Onboarding ───────────────────────────────────────────────────────
@@ -466,6 +590,132 @@ def wheel_data(db, user, wheel):
     )
 
 
+# ── Rounds (shared vetoes + pending pick) ────────────────────────────
+def empty_round():
+    return {"vetoes": {}, "pending": None}
+
+
+def round_data(data):
+    """The wheel's current round; older databases don't have one yet."""
+    rnd = data.setdefault("round", empty_round())
+    rnd.setdefault("vetoes", {})
+    rnd.setdefault("pending", None)
+    return rnd
+
+
+def round_payload(db, user, data):
+    """Round state as one user sees it — 'my' fields are personalised."""
+    rnd = round_data(data)
+    pending = None
+    if rnd["pending"]:
+        pending = {k: v for k, v in rnd["pending"].items() if k != "by"}
+        pending["mine"] = rnd["pending"]["by"] == user["id"]
+    return {
+        "vetoed_ids": sorted(set(rnd["vetoes"].values())),
+        "my_veto_used": user["id"] in rnd["vetoes"],
+        "vetoes_used": len(rnd["vetoes"]),
+        "members": sum(1 for u in db["users"].values() if u["space"] == user["space"]),
+        "pending": pending,
+    }
+
+
+def finalize_pick(db, user, data, name, flag, by_name):
+    entry = {
+        "name": name,
+        "flag": flag,
+        "date": datetime.now(timezone.utc).isoformat(),
+        "by": by_name,
+    }
+    data["history"] = ([entry] + data["history"])[:HISTORY_LIMIT]
+    data["round"] = empty_round()  # a decision closes the round
+
+
+@app.get("/api/wheels/<wheel>/round")
+def get_round(wheel):
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        return jsonify(round_payload(db, user, wheel_data(db, user, wheel)))
+
+
+@app.post("/api/wheels/<wheel>/round/veto")
+def veto_destination(wheel):
+    payload = request.get_json(force=True, silent=True) or {}
+    dest_id = str(payload.get("dest_id", ""))
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        data = wheel_data(db, user, wheel)
+        rnd = round_data(data)
+        if user["id"] in rnd["vetoes"]:
+            abort(409, description="you've already used your veto this round")
+        if not any(d["id"] == dest_id for d in data["destinations"]):
+            abort(404, description="destination not found")
+        rnd["vetoes"][user["id"]] = dest_id
+        if rnd["pending"] and rnd["pending"]["dest_id"] == dest_id:
+            rnd["pending"] = None  # the veto shoots down the waiting pick
+        save_db(db)
+        return jsonify(round_payload(db, user, data))
+
+
+@app.post("/api/wheels/<wheel>/round/pick")
+def propose_pick(wheel):
+    """The spinner accepted a result. It only becomes history once every
+    partner who could still veto has had the chance — until then it is
+    the round's pending pick."""
+    payload = request.get_json(force=True, silent=True) or {}
+    dest_id = str(payload.get("dest_id", ""))
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        data = wheel_data(db, user, wheel)
+        rnd = round_data(data)
+        dest = next((d for d in data["destinations"] if d["id"] == dest_id), None)
+        if dest is None:
+            abort(404, description="destination not found")
+        if dest_id in rnd["vetoes"].values():
+            abort(409, description="that destination was vetoed this round")
+        can_still_veto = any(
+            u["space"] == user["space"] and u["id"] != user["id"] and u["id"] not in rnd["vetoes"]
+            for u in db["users"].values()
+        )
+        if can_still_veto:
+            rnd["pending"] = {
+                "dest_id": dest["id"],
+                "name": dest["name"],
+                "flag": dest["flag"],
+                "by": user["id"],
+                "by_name": user["name"],
+                "date": datetime.now(timezone.utc).isoformat(),
+            }
+            save_db(db)
+            return jsonify({"final": False, "round": round_payload(db, user, data)})
+        finalize_pick(db, user, data, dest["name"], dest["flag"], user["name"])
+        save_db(db)
+        return jsonify({
+            "final": True,
+            "history": data["history"],
+            "round": round_payload(db, user, data),
+        })
+
+
+@app.post("/api/wheels/<wheel>/round/confirm")
+def confirm_pick(wheel):
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        data = wheel_data(db, user, wheel)
+        rnd = round_data(data)
+        pending = rnd["pending"]
+        if not pending:
+            abort(404, description="no pick is waiting for a thumbs-up")
+        if pending["by"] == user["id"]:
+            abort(400, description="your partner has to confirm this one")
+        finalize_pick(db, user, data, pending["name"], pending["flag"], pending["by_name"])
+        save_db(db)
+        return jsonify({"history": data["history"], "round": round_payload(db, user, data)})
+
+
 # ── Destinations API ─────────────────────────────────────────────────
 @app.get("/api/wheels/<wheel>/destinations")
 def list_destinations(wheel):
@@ -525,32 +775,13 @@ def list_history(wheel):
         return jsonify(wheel_data(db, current_user(db), wheel)["history"])
 
 
-@app.post("/api/wheels/<wheel>/history")
-def add_history(wheel):
-    payload = request.get_json(force=True, silent=True) or {}
-    name = str(payload.get("name", "")).strip()[:60]
-    if not name:
-        abort(400, description="name is required")
-    with _lock:
-        db = load_db()
-        user = current_user(db)
-        entry = {
-            "name": name,
-            "flag": (str(payload.get("flag", "📍")).strip() or "📍")[:28],
-            "date": datetime.now(timezone.utc).isoformat(),
-            "by": user["name"],
-        }
-        data = wheel_data(db, user, wheel)
-        data["history"] = ([entry] + data["history"])[:HISTORY_LIMIT]
-        save_db(db)
-        return jsonify(data["history"]), 201
-
-
 @app.delete("/api/wheels/<wheel>/history")
 def clear_history(wheel):
     with _lock:
         db = load_db()
-        wheel_data(db, current_user(db), wheel)["history"] = []
+        data = wheel_data(db, current_user(db), wheel)
+        data["history"] = []
+        data["round"] = empty_round()  # clean slate all round
         save_db(db)
     return "", 204
 

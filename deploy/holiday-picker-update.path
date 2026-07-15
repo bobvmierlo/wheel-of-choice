@@ -1,0 +1,12 @@
+# Watches for the update-requested flag the holiday picker's admin button
+# drops into the state directory, then starts holiday-picker-update.service.
+# See holiday-picker-update.service for install instructions.
+
+[Unit]
+Description=Wheel of Wander — watch for update requests
+
+[Path]
+PathExists=/var/lib/holiday-picker/update-requested
+
+[Install]
+WantedBy=multi-user.target
