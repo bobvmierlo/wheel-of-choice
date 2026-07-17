@@ -273,7 +273,9 @@
     <h3>Server</h3>
     <p class="manage-hint">Fetch the latest version from git and restart the
       server. Needs the updater units from <code>deploy/</code> installed.</p>
+    <p class="manage-hint" id="admin-version"></p>
     <button type="button" class="btn btn-ghost" id="admin-update-btn">⬆️ Update &amp; restart server</button>
+    <p class="update-status" id="update-status" role="status"></p>
     <p class="form-error" id="admin-error" role="alert"></p>
   </dialog>
 
@@ -336,6 +338,7 @@
 
   <footer class="site-footer">
     Made for two indecisive travellers ❤️ · your wheels live on your own server, shared with whoever has your code
+    <span class="footer-version" id="footer-version"></span>
   </footer>
 
   <script src="app.js"></script>

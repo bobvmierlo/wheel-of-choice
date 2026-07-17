@@ -297,6 +297,7 @@ body {
 .btn:disabled:active { transform: none; }
 
 .site-footer { text-align: center; color: var(--text-dim); font-size: 0.8rem; padding: 2rem 1rem; }
+.footer-version { display: block; margin-top: 0.35rem; opacity: 0.75; }
 
 /* ── Account bar ───────────────────────────────────────────────────── */
 .account-bar {
@@ -365,6 +366,7 @@ body {
 .auth-form input:focus, .join-row input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
 .form-error { color: #ffb3c2; font-size: 0.85rem; min-height: 1.2em; margin-top: 0.5rem; }
+.update-status { color: var(--text-dim); font-size: 0.85rem; min-height: 1.2em; margin-top: 0.5rem; }
 
 .legacy-banner {
   background: rgba(255, 184, 77, 0.08);

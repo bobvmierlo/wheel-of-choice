@@ -216,6 +216,9 @@
   const adminUserList = document.getElementById('admin-user-list');
   const adminError = document.getElementById('admin-error');
   const adminUpdateBtn = document.getElementById('admin-update-btn');
+  const adminVersion = document.getElementById('admin-version');
+  const updateStatus = document.getElementById('update-status');
+  const footerVersion = document.getElementById('footer-version');
 
   const manageModal = document.getElementById('manage-modal');
   const manageBtn = document.getElementById('manage-btn');
@@ -480,6 +483,7 @@
     adminError.textContent = '';
     adminUserList.innerHTML = '';
     adminModal.showModal();
+    loadVersion(); // another admin may have updated in the meantime
     try {
       renderAdminUsers(await rootApi('/admin/users'));
     } catch (err) {
@@ -545,18 +549,103 @@
     }
   }
 
+  // ── Server version & updates ──────────────────────────────────────
+  // /api/version tells us which commit is running and when the server
+  // process started. After an update request we poll it: the updater
+  // restarting the server changes server_started (and, if the pull
+  // brought something new, the commit) — that's our success signal.
+  const UPDATE_POLL_MS = 3000;
+  const UPDATE_TIMEOUT_MS = 3 * 60 * 1000;
+  let serverVersion = null;
+  let updateTimer = null;
+
+  async function fetchVersion() {
+    const res = await fetch('/api/version');
+    if (!res.ok) throw new Error(`Server said ${res.status}`);
+    return res.json();
+  }
+
+  function formatDateTime(iso) {
+    const d = new Date(iso);
+    return Number.isNaN(d.getTime())
+      ? iso
+      : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+  }
+
+  function renderVersion() {
+    const v = serverVersion;
+    if (!v || !v.commit) {
+      footerVersion.textContent = '';
+      adminVersion.textContent = '';
+      return;
+    }
+    const when = formatDateTime(v.commit_date);
+    footerVersion.textContent = `running ${v.commit} · last updated ${when}`;
+    adminVersion.textContent =
+      `Currently running commit ${v.commit}` +
+      (v.commit_subject ? ` (“${v.commit_subject}”)` : '') +
+      ` · last updated ${when}.`;
+  }
+
+  async function loadVersion() {
+    try {
+      serverVersion = await fetchVersion();
+    } catch {
+      serverVersion = null;
+    }
+    renderVersion();
+  }
+
+  function watchUpdate(baseline) {
+    clearInterval(updateTimer);
+    const startedAt = Date.now();
+    updateStatus.textContent = '⏳ Update requested — waiting for the server to pull the latest version and restart…';
+    updateTimer = setInterval(async () => {
+      let v;
+      try {
+        v = await fetchVersion();
+      } catch {
+        // unreachable mid-restart — that's expected, keep polling
+        updateStatus.textContent = '🔄 Server is restarting…';
+        return;
+      }
+      if (!baseline || v.server_started !== baseline.server_started) {
+        clearInterval(updateTimer);
+        adminUpdateBtn.disabled = false;
+        serverVersion = v;
+        renderVersion();
+        updateStatus.textContent = !baseline || v.commit !== baseline.commit
+          ? `✅ Updated! Now running ${v.commit}${v.commit_subject ? ` (“${v.commit_subject}”)` : ''}.`
+          : '✅ Server restarted — it was already on the latest version.';
+        return;
+      }
+      if (Date.now() - startedAt > UPDATE_TIMEOUT_MS) {
+        clearInterval(updateTimer);
+        adminUpdateBtn.disabled = false;
+        updateStatus.textContent = v.update_pending
+          ? '⚠️ Nothing picked up the update request — are the updater units from deploy/ installed and enabled?'
+          : '⚠️ The update request was picked up, but the server never restarted — the git pull may have failed. Check `journalctl -u holiday-picker-update` on the server.';
+      }
+    }, UPDATE_POLL_MS);
+  }
+
   adminUpdateBtn.addEventListener('click', async () => {
     if (!confirm('Pull the latest version from git and restart the server? Everyone is briefly disconnected.')) return;
     adminError.textContent = '';
+    updateStatus.textContent = '';
     adminUpdateBtn.disabled = true;
+    let baseline = serverVersion;
+    try {
+      baseline = await fetchVersion(); // fresh baseline to compare against
+    } catch { /* keep the last known one */ }
     try {
       await rootApi('/admin/update', { method: 'POST' });
-      adminError.textContent = '✅ Update requested — the server pulls the latest version and restarts in a moment.';
     } catch (err) {
-      adminError.textContent = `⚠️ ${err.message}`;
-    } finally {
       adminUpdateBtn.disabled = false;
+      updateStatus.textContent = `⚠️ ${err.message}`;
+      return;
     }
+    watchUpdate(baseline);
   });
 
   // ── Wheel tabs ────────────────────────────────────────────────────
@@ -1161,6 +1250,7 @@
 
   // ── Init ──────────────────────────────────────────────────────────
   syncTabs();
+  loadVersion();
   if (token) {
     fetchMe();
   } else {

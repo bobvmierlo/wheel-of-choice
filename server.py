@@ -38,6 +38,7 @@ import hmac
 import json
 import os
 import secrets
+import subprocess
 import threading
 import uuid
 from datetime import datetime, timezone
@@ -76,6 +77,31 @@ MAX_SEED_FAVORITES = 8  # per wheel, when onboarding picks favourites
 
 app = Flask(__name__)
 _lock = threading.Lock()
+
+SERVER_STARTED = datetime.now(timezone.utc).isoformat()
+
+
+def git_version():
+    """Short hash, date and subject of the checked-out commit. All None
+    when git or the repo isn't available (e.g. a tarball deploy). The
+    safe.directory override is needed under systemd: the repo is owned
+    by root while the service runs as an unprivileged DynamicUser."""
+    none = {"commit": None, "commit_date": None, "commit_subject": None}
+    try:
+        out = subprocess.run(
+            ["git", "-c", f"safe.directory={ROOT}", "-C", str(ROOT),
+             "log", "-1", "--format=%h%n%cI%n%s"],
+            capture_output=True, text=True, timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return none
+    lines = out.stdout.strip().split("\n") if out.returncode == 0 else []
+    if len(lines) < 3:
+        return none
+    return {"commit": lines[0], "commit_date": lines[1], "commit_subject": lines[2]}
+
+
+GIT_VERSION = git_version()
 
 
 @app.errorhandler(HTTPException)
@@ -480,6 +506,20 @@ def admin_update():
         except OSError:
             abort(500, description="could not write the update request")
     return jsonify({"requested": True}), 202
+
+
+@app.get("/api/version")
+def version():
+    """What's running right now. The frontend shows the commit + date in
+    the UI and polls this after an update request: server_started changes
+    once the updater has restarted us, and the commit moves when the pull
+    actually brought something new. update_pending reports whether the
+    flag file is still waiting to be picked up."""
+    return jsonify({
+        **GIT_VERSION,
+        "server_started": SERVER_STARTED,
+        "update_pending": UPDATE_FLAG.exists(),
+    })
 
 
 # ── Onboarding ───────────────────────────────────────────────────────
