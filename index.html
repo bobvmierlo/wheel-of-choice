@@ -31,6 +31,7 @@
         <button type="button" class="tab active" data-mode="login">Log in</button>
         <button type="button" class="tab" data-mode="register">Create account</button>
       </nav>
+      <p class="invite-banner" id="invite-banner" role="status" hidden></p>
       <form id="auth-form" class="auth-form">
         <label>Your name
           <input type="text" id="auth-name" autocomplete="username" maxlength="30" required
@@ -238,6 +239,12 @@
     <div class="share-code-row">
       <code class="share-code" id="share-code"></code>
       <button type="button" class="btn btn-ghost" id="copy-code-btn">📋 Copy</button>
+    </div>
+    <p class="manage-hint">Even easier: send them this invite link. Creating an account
+      through it joins your wheels automatically.</p>
+    <div class="share-code-row">
+      <code class="share-code share-link" id="share-link"></code>
+      <button type="button" class="btn btn-ghost" id="copy-link-btn">📋 Copy</button>
     </div>
     <p class="share-members" id="share-members"></p>
 
