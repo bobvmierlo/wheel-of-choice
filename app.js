@@ -97,7 +97,7 @@
     const before = state.round;
     state.round = round;
     if (JSON.stringify(before) === JSON.stringify(round)) return;
-    if (before.pending && before.pending.mine && !round.pending) {
+    if (before.pending && (before.pending.mine || before.pending.i_confirmed) && !round.pending) {
       wheelHint.textContent = round.vetoed_ids.includes(before.pending.dest_id)
         ? `${before.pending.flag} ${before.pending.name} got vetoed 🙅 — spin again!`
         : `${before.pending.flag} ${before.pending.name} it is — time to book! 🧳`;
@@ -915,7 +915,9 @@
   }
 
   function segWeight(d) {
-    return 1 + Math.min(starCount(d), 2);
+    // every member's star widens the slice: 1 star → double, 2 → triple,
+    // 3+ (spaces of three or four) → quadruple, where it caps
+    return 1 + Math.min(starCount(d), 3);
   }
 
   function starIcon(d) {
@@ -1186,7 +1188,7 @@
   // ── Result modal ──────────────────────────────────────────────────
   function describe(d) {
     const parts = [
-      starCount(d) >= 2 ? '🌟 loved by both of you' : (isFavorite(d) ? '⭐ favourite' : ''),
+      starCount(d) >= 2 ? `🌟 starred by ${starCount(d)} of you` : (isFavorite(d) ? '⭐ favourite' : ''),
       BUDGET_LABELS[d.budget],
       DISTANCE_LABELS[d.distance],
       d.vibes.map((v) => VIBE_LABELS[v]).join(' · '),
@@ -1232,7 +1234,7 @@
         renderHistory();
         wheelHint.textContent = `${result.flag} ${result.name} it is — time to book! 🧳`;
       } else {
-        wheelHint.textContent = `Waiting for ${partnerNames()} to okay ${result.flag} ${result.name} — they can still veto ✋`;
+        wheelHint.textContent = `Waiting for ${waitingNames(res.round.pending)} to okay ${result.flag} ${result.name} — they can still veto ✋`;
       }
     } catch (err) {
       console.error(err);
@@ -1264,13 +1266,23 @@
     }
   });
 
-  // ── Pending pick banner (the partner spun — accept or veto) ──────
+  // ── Pending pick banner (someone spun — accept or veto) ──────────
+  // With three or four people on the wheels a pick stays pending until
+  // everyone who can still veto has okayed it; waiting_names says who's
+  // still due.
+  function waitingNames(p) {
+    return (p.waiting_names || []).join(' & ') || partnerNames();
+  }
+
   function renderPending() {
     const p = state.round.pending;
     pendingBanner.hidden = !p;
     if (!p) return;
     if (p.mine) {
-      pendingText.textContent = `⏳ You picked ${p.flag} ${p.name} — waiting for ${partnerNames()} to give it a thumbs-up.`;
+      pendingText.textContent = `⏳ You picked ${p.flag} ${p.name} — waiting for ${waitingNames(p)} to give it a thumbs-up.`;
+      pendingActions.hidden = true;
+    } else if (p.i_confirmed) {
+      pendingText.textContent = `👍 You're in for ${p.flag} ${p.name} — waiting for ${waitingNames(p)}.`;
       pendingActions.hidden = true;
     } else {
       pendingText.textContent = `🎡 ${p.by_name} spun ${p.flag} ${p.name}! Are you in — or is this your veto?`;
@@ -1286,9 +1298,13 @@
     if (!p) return;
     try {
       const res = await api('/round/confirm', { method: 'POST' });
-      state.history = res.history;
-      renderHistory();
-      wheelHint.textContent = `${p.flag} ${p.name} it is — time to book! 🧳`;
+      if (res.final) {
+        state.history = res.history;
+        renderHistory();
+        wheelHint.textContent = `${p.flag} ${p.name} it is — time to book! 🧳`;
+      } else {
+        wheelHint.textContent = `You're in! Still waiting for ${waitingNames(res.round.pending)} to okay ${p.flag} ${p.name}.`;
+      }
       applyRound(res.round);
     } catch (err) {
       console.error(err);
@@ -1449,7 +1465,7 @@
       const star = document.createElement('button');
       star.type = 'button';
       star.className = 'star-btn';
-      star.title = 'Star it (your star) — one star doubles the wheel segment, both of you starring triples it';
+      star.title = 'Star it (your star) — every member\'s star widens this slice of the wheel';
       const paintStar = () => {
         star.textContent = starIcon(d);
         star.classList.toggle('starred', isFavorite(d));

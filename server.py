@@ -792,13 +792,32 @@ def round_data(data):
     return rnd
 
 
+def pending_blockers(db, space_id, rnd):
+    """Members who can still stop the pending pick: everyone in the space
+    except the picker who has neither confirmed it nor spent their veto.
+    With more than two members the pick stays pending until this list is
+    empty — every voice gets heard, not just the first to answer."""
+    p = rnd["pending"]
+    confirmed = set(p.get("confirmed", []))
+    return [
+        u for u in db["users"].values()
+        if u["space"] == space_id and u["id"] != p["by"]
+        and u["id"] not in confirmed and u["id"] not in rnd["vetoes"]
+    ]
+
+
 def round_payload(db, user, data):
     """Round state as one user sees it — 'my' fields are personalised."""
     rnd = round_data(data)
     pending = None
     if rnd["pending"]:
-        pending = {k: v for k, v in rnd["pending"].items() if k != "by"}
-        pending["mine"] = rnd["pending"]["by"] == user["id"]
+        p = rnd["pending"]
+        pending = {k: v for k, v in p.items() if k not in ("by", "confirmed")}
+        pending["mine"] = p["by"] == user["id"]
+        pending["i_confirmed"] = user["id"] in p.get("confirmed", [])
+        pending["waiting_names"] = sorted(
+            u["name"] for u in pending_blockers(db, user["space"], rnd)
+        )
     return {
         "vetoed_ids": sorted(set(rnd["vetoes"].values())),
         "my_veto_used": user["id"] in rnd["vetoes"],
@@ -877,6 +896,7 @@ def propose_pick(wheel):
                 "flag": dest["flag"],
                 "by": user["id"],
                 "by_name": user["name"],
+                "confirmed": [],
                 "date": datetime.now(timezone.utc).isoformat(),
             }
             save_db(db)
@@ -892,6 +912,9 @@ def propose_pick(wheel):
 
 @app.post("/api/wheels/<wheel>/round/confirm")
 def confirm_pick(wheel):
+    """A member okays the pending pick. With three or four people sharing
+    the wheels, the pick only becomes history once *everyone* who could
+    still veto has given their thumbs-up."""
     with _lock:
         db = load_db()
         user = current_user(db)
@@ -901,10 +924,20 @@ def confirm_pick(wheel):
         if not pending:
             abort(404, description="no pick is waiting for a thumbs-up")
         if pending["by"] == user["id"]:
-            abort(400, description="your partner has to confirm this one")
+            abort(400, description="the others have to confirm this one")
+        confirmed = pending.setdefault("confirmed", [])
+        if user["id"] not in confirmed:
+            confirmed.append(user["id"])
+        if pending_blockers(db, user["space"], rnd):
+            save_db(db)
+            return jsonify({"final": False, "round": round_payload(db, user, data)})
         finalize_pick(db, user, data, pending["dest_id"], pending["name"], pending["flag"], pending["by_name"])
         save_db(db)
-        return jsonify({"history": data["history"], "round": round_payload(db, user, data)})
+        return jsonify({
+            "final": True,
+            "history": data["history"],
+            "round": round_payload(db, user, data),
+        })
 
 
 # ── Destinations API ─────────────────────────────────────────────────

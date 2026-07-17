@@ -17,14 +17,15 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   cluttering the wheel, the best vibe/budget matches are pre-starred as
   favourites, and the places you picked yourself start starred too —
   even when they're beyond your roam range.
-- **Sharing for couples** 🔗 — every set of wheels has a share code and
-  an invite link. Send your partner the link and the account they create
-  through it joins your wheels automatically (or they enter the code by
-  hand); from then on you both spin the *same* wheels: destinations,
-  favourites and history stay in sync, while each of you keeps your own
-  filters. Right after joining, a welcome screen invites the newcomer to
-  star the places *they* dream of, so the shared wheels reflect both of
-  you from day one.
+- **Sharing** 🔗 — every set of wheels has a share code and an invite
+  link, and it isn't limited to couples: three or four friends sharing
+  one set of wheels works just as well. Send the link and the account
+  someone creates through it joins your wheels automatically (or they
+  enter the code by hand); from then on you all spin the *same* wheels:
+  destinations, favourites and history stay in sync, while everyone
+  keeps their own filters. Right after joining, a welcome screen invites
+  the newcomer to star the places *they* dream of, so the shared wheels
+  reflect everyone from day one.
 - **Two wheels** 🌍🏙️ — tabs switch between *Holidays* (whole countries)
   and *City trips* (cities in and around Europe), each with its own
   destination list and history.
@@ -42,17 +43,18 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
     their best months)
 - **Favourites** ⭐ — every star is personal: star the destinations you
   love (in the manage panel, during onboarding, or on the joiner's
-  welcome screen) and they get a double-width segment on the wheel. A
-  place starred by *both* of you 🌟 gets a triple-width segment — the
-  wheel leans toward what you agree on.
+  welcome screen) and they get a double-width segment on the wheel.
+  Every extra star from another member widens the slice further 🌟 (up
+  to four wide) — the wheel leans toward what you agree on.
 - **Manage the destination list** ⚙️ — untick destinations to keep them
   off the wheel, ✏️ edit any destination's name and tags, delete them, or
   add your own.
 - **Veto & respin** 🙅 — every member gets exactly one veto per round
   (tracked on the server, so no sneaky double vetoes), and a spin one
-  partner accepts waits for the other's thumbs-up: their devices show the
-  pick with an accept-or-veto banner before it counts. A round closes when
-  a pick makes it into the history.
+  member accepts waits for the others' thumbs-up: their devices show the
+  pick with an accept-or-veto banner, and with three or four members it
+  only counts once *everyone* who can still veto has okayed it. A round
+  closes when a pick makes it into the history.
 - **Spin history & trip status** 📖 — accepted destinations are saved
   (including who spun them) so you can look back at past picks. Each
   pick can be marked 📅 *Booked* or ✅ *Been there* (with an optional
