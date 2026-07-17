@@ -248,6 +248,9 @@ def register():
     payload = request.get_json(force=True, silent=True) or {}
     name = str(payload.get("name", "")).strip()[:30]
     password = str(payload.get("password", ""))
+    # Registering through an invite link carries the share code along, so
+    # the new account lands straight in the partner's space.
+    code = str(payload.get("code", "")).strip().upper().replace(" ", "")
     if len(name) < 2:
         abort(400, description="pick a name of at least 2 characters")
     if len(password) < 4:
@@ -256,8 +259,15 @@ def register():
         db = load_db()
         if any(u["name"].lower() == name.lower() for u in db["users"].values()):
             abort(400, description="that name is already taken — log in instead?")
-        space = new_space()
-        db["spaces"][space["id"]] = space
+        space = None
+        if code:
+            space = next((s for s in db["spaces"].values() if s["code"] == code), None)
+            if space is None:
+                abort(400, description="that invite link doesn't work (anymore) — "
+                                       "ask your partner for a fresh one, or register without it")
+        if space is None:
+            space = new_space()
+            db["spaces"][space["id"]] = space
         user = {
             "id": "u-" + uuid.uuid4().hex[:10],
             "name": name,
@@ -480,6 +490,8 @@ def seed_wheels(home, roam, vibes, budget):
       lists the home regions it is "regional" for; long-haul stays put)
     - destinations beyond the chosen roam range are kept but disabled,
       so they stay discoverable in the manage panel
+    - catalogue entries marked "enabled": false are niche picks that also
+      start off the wheel (a full catalogue would drown it in segments)
     - entries matching the chosen vibes (and budget) get pre-starred
     """
     allowed = ROAM_DISTANCES[roam]
@@ -503,7 +515,7 @@ def seed_wheels(home, roam, vibes, budget):
                 "seasons": entry["seasons"],
                 "party": entry["party"],
                 "favorite": False,
-                "enabled": distance in allowed,
+                "enabled": distance in allowed and entry.get("enabled", True),
             })
         if vibes:
             scored = []

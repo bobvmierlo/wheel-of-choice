@@ -31,6 +31,17 @@
   let token = localStorage.getItem(TOKEN_KEY) || '';
   let me = null; // { user: {id, name}, prefs, space: {code, onboarded, members} }
 
+  // An invite link (?join=CODE) pre-fills the join flow: registering
+  // through it joins the shared wheels right away, logging in gets the
+  // code filled in wherever a join field is available.
+  const urlParams = new URLSearchParams(location.search);
+  let inviteCode = (urlParams.get('join') || '').toUpperCase().replace(/\s+/g, '');
+  if (urlParams.has('join')) {
+    urlParams.delete('join');
+    const qs = urlParams.toString();
+    history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
+  }
+
   const state = {
     filters: defaultFilters(),
     destinations: [],
@@ -171,6 +182,9 @@
   const closeShareBtn = document.getElementById('close-share-btn');
   const shareCode = document.getElementById('share-code');
   const copyCodeBtn = document.getElementById('copy-code-btn');
+  const shareLink = document.getElementById('share-link');
+  const copyLinkBtn = document.getElementById('copy-link-btn');
+  const inviteBanner = document.getElementById('invite-banner');
   const shareMembers = document.getElementById('share-members');
   const joinCode = document.getElementById('join-code');
   const joinBtn = document.getElementById('join-btn');
@@ -233,9 +247,13 @@
     accountName.textContent = `👤 ${me.user.name}`;
     shareBtn.hidden = !me.space.onboarded;
     adminBtn.hidden = !me.user.admin;
+    const invite = inviteCode !== me.space.code ? inviteCode : '';
+    inviteCode = '';
+    inviteBanner.hidden = true;
     if (!me.space.onboarded) {
       document.getElementById('onboard-name').textContent = me.user.name;
       legacyBanner.hidden = !me.legacy_available;
+      if (invite) onboardCode.value = invite;
       showView('onboard');
       return;
     }
@@ -244,6 +262,12 @@
     syncFilterButtons();
     state.round = emptyRound(); // the real round arrives with the wheel data
     loadWheelData();
+    if (invite) {
+      // Followed someone's invite link while already set up — offer the
+      // join with the code filled in, one click away.
+      shareBtn.click();
+      joinCode.value = invite;
+    }
   }
 
   async function fetchMe() {
@@ -285,9 +309,11 @@
     authError.textContent = '';
     authSubmit.disabled = true;
     try {
+      const body = { name: authName.value.trim(), password: authPassword.value };
+      if (authMode === 'register' && inviteCode) body.code = inviteCode;
       const result = await rootApi(`/auth/${authMode === 'login' ? 'login' : 'register'}`, {
         method: 'POST',
-        body: JSON.stringify({ name: authName.value.trim(), password: authPassword.value }),
+        body: JSON.stringify(body),
       });
       token = result.token;
       localStorage.setItem(TOKEN_KEY, token);
@@ -378,8 +404,13 @@
   });
 
   // ── Share modal ───────────────────────────────────────────────────
+  function inviteLink() {
+    return `${location.origin}${location.pathname}?join=${encodeURIComponent(me.space.code)}`;
+  }
+
   shareBtn.addEventListener('click', () => {
     shareCode.textContent = me.space.code;
+    shareLink.textContent = inviteLink();
     const others = me.space.members.filter((n) => n !== me.user.name);
     shareMembers.textContent = others.length
       ? `Travelling together: ${me.space.members.join(', ')} 💑`
@@ -387,17 +418,41 @@
     shareError.textContent = '';
     joinCode.value = '';
     copyCodeBtn.textContent = '📋 Copy';
+    copyLinkBtn.textContent = '📋 Copy';
     shareModal.showModal();
   });
   closeShareBtn.addEventListener('click', () => shareModal.close());
 
-  copyCodeBtn.addEventListener('click', async () => {
-    try {
-      await navigator.clipboard.writeText(me.space.code);
-      copyCodeBtn.textContent = '✅ Copied';
-    } catch {
-      copyCodeBtn.textContent = '⚠️ Copy failed';
+  // The async Clipboard API only exists in secure contexts (https or
+  // localhost); self-hosted installs usually run plain http on the LAN,
+  // so fall back to the old textarea + execCommand('copy') trick there.
+  async function copyToClipboard(text) {
+    if (navigator.clipboard) {
+      try {
+        await navigator.clipboard.writeText(text);
+        return true;
+      } catch { /* denied or unavailable — try the fallback */ }
     }
+    const scratch = document.createElement('textarea');
+    scratch.value = text;
+    scratch.setAttribute('readonly', '');
+    scratch.style.position = 'fixed';
+    scratch.style.opacity = '0';
+    document.body.append(scratch);
+    scratch.focus();
+    scratch.select();
+    let copied = false;
+    try { copied = document.execCommand('copy'); } catch { /* nothing worked */ }
+    scratch.remove();
+    return copied;
+  }
+
+  copyCodeBtn.addEventListener('click', async () => {
+    copyCodeBtn.textContent = (await copyToClipboard(me.space.code)) ? '✅ Copied' : '⚠️ Copy failed';
+  });
+
+  copyLinkBtn.addEventListener('click', async () => {
+    copyLinkBtn.textContent = (await copyToClipboard(inviteLink())) ? '✅ Copied' : '⚠️ Copy failed';
   });
 
   joinBtn.addEventListener('click', () => joinWithCode(joinCode.value, shareError));
@@ -599,7 +654,10 @@
       ctx.save();
       ctx.translate(cx, cy);
       ctx.rotate(mid);
-      ctx.textAlign = 'right';
+      // Left-anchor and position manually: WebKit (iOS Safari) ignores
+      // textAlign for strings that take the complex text path (emoji,
+      // flags), which pushed right-aligned labels outside the wheel.
+      ctx.textAlign = 'left';
       ctx.textBaseline = 'middle';
       ctx.fillStyle = 'rgba(20, 10, 40, 0.9)';
       const fontSize = Math.max(11, Math.min(20, (radius * seg) / 3.2, size * 0.032));
@@ -609,7 +667,7 @@
       while (ctx.measureText(label).width > maxWidth && label.length > 6) {
         label = label.slice(0, -2).trimEnd() + '…';
       }
-      ctx.fillText(label, radius - 14, 0);
+      ctx.fillText(label, radius - 14 - ctx.measureText(label).width, 0);
       ctx.restore();
     }
 
@@ -1107,5 +1165,10 @@
     fetchMe();
   } else {
     showView('auth');
+    if (inviteCode) {
+      document.querySelector('.auth-tabs .tab[data-mode="register"]').click();
+      inviteBanner.textContent = `🎟️ You've been invited to shared wheels (code ${inviteCode}) — create an account and you'll join them automatically.`;
+      inviteBanner.hidden = false;
+    }
   }
 })();

@@ -384,8 +384,26 @@ body {
 .join-row input { flex: 1; min-width: 0; text-transform: uppercase; }
 .join-row input::placeholder { text-transform: none; }
 
+.invite-banner {
+  background: rgba(110, 231, 168, 0.08);
+  border: 1px solid rgba(110, 231, 168, 0.35);
+  border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+
 /* ── Share modal ───────────────────────────────────────────────────── */
 .share-code-row { display: flex; align-items: center; gap: 0.7rem; margin: 0.4rem 0 0.8rem; }
+.share-link {
+  flex: 1;
+  min-width: 0;
+  font-size: 0.82rem;
+  font-weight: 500;
+  letter-spacing: 0;
+  word-break: break-all;
+}
 .share-code {
   font-size: 1.5rem;
   font-weight: 700;

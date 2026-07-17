@@ -15,10 +15,12 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   computed relative to *your* home region, far-away places are parked as
   disabled instead of cluttering the wheel, and the best vibe/budget
   matches are pre-starred as favourites.
-- **Sharing for couples** 🔗 — every set of wheels has a share code.
-  Your partner registers their own account, enters your code, and from
-  then on you both spin the *same* wheels: destinations, favourites and
-  history stay in sync, while each of you keeps your own filters.
+- **Sharing for couples** 🔗 — every set of wheels has a share code and
+  an invite link. Send your partner the link and the account they create
+  through it joins your wheels automatically (or they enter the code by
+  hand); from then on you both spin the *same* wheels: destinations,
+  favourites and history stay in sync, while each of you keeps your own
+  filters.
 - **Two wheels** 🌍🏙️ — tabs switch between *Holidays* (whole countries)
   and *City trips* (cities in and around Europe), each with its own
   destination list and history.
