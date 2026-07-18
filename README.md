@@ -4,23 +4,6 @@ A tiny webapp that settles "where to next?" — and "where do we eat?" —
 with a wheel-of-fortune spin. A small Flask server stores accounts and
 wheels; the frontend is plain HTML/CSS/JS with no build step.
 
-> **A note on the name**: this project started life as *Wheel of Wander /
-> holiday-picker*, a holiday destination picker for two. It has since
-> outgrown that: wheels are now independent, individually shareable, and
-> not just about travel (there's a restaurant wheel type) — so both the
-> app and the repository are now called **wheel-of-choice**. GitHub
-> redirects the old `holiday-picker` URLs, so existing clones keep
-> working; still, it's tidiest to point them at the new URL once:
->
-> ```bash
-> git remote set-url origin https://github.com/bobvmierlo/wheel-of-choice.git
-> ```
->
-> The systemd units and the install paths (`/opt/holiday-picker`,
-> `/var/lib/holiday-picker`) keep their historical names on purpose:
-> renaming them would break existing installs (and orphan their data)
-> for a purely cosmetic win.
-
 ## Features
 
 - **Accounts** 👤 — registering takes ten seconds: a name and a password,
