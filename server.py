@@ -30,8 +30,8 @@ other users, delete accounts, and pull a user out of shared wheels (see
 the /api/admin endpoints).
 
 Storage: data/db.json next to this file by default; override the
-directory with the HOLIDAY_DATA_DIR environment variable (the systemd
-unit sets it to /var/lib/holiday-picker). Old databases are migrated
+directory with the WHEEL_DATA_DIR environment variable (the systemd
+unit sets it to /var/lib/wheel-of-choice). Old databases are migrated
 automatically: v2 *spaces* are split into independent wheels (the old
 space code keeps working — it now joins the holidays wheel), and the
 even older single-household layout becomes unclaimed wheels that the
@@ -57,7 +57,12 @@ from flask import Flask, abort, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 ROOT = Path(__file__).parent.resolve()
-DATA_DIR = Path(os.environ.get("HOLIDAY_DATA_DIR", str(ROOT / "data")))
+# HOLIDAY_DATA_DIR is the pre-rename name — still honoured so a git pull
+# under an old unit file can't silently start with an empty database
+DATA_DIR = Path(
+    os.environ.get("WHEEL_DATA_DIR")
+    or os.environ.get("HOLIDAY_DATA_DIR", str(ROOT / "data"))
+)
 DB_FILE = DATA_DIR / "db.json"
 UPDATE_FLAG = DATA_DIR / "update-requested"
 
@@ -766,9 +771,9 @@ def admin_restore():
 @app.post("/api/admin/update")
 def admin_update():
     """Ask the host to update to the latest version. The Flask process is
-    sandboxed and unprivileged (see deploy/holiday-picker.service), so it
+    sandboxed and unprivileged (see deploy/wheel-of-choice.service), so it
     can't run `sudo git pull` itself — it drops a flag file in the state
-    directory instead, and the root-level holiday-picker-update.path unit
+    directory instead, and the root-level wheel-of-choice-update.path unit
     (see deploy/) picks it up, pulls, and restarts this service."""
     with _lock:
         db = load_db()

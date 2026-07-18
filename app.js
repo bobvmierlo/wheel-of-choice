@@ -1002,7 +1002,7 @@
         adminUpdateBtn.disabled = false;
         updateStatus.textContent = v.update_pending
           ? '⚠️ Nothing picked up the update request — are the updater units from deploy/ installed and enabled?'
-          : '⚠️ The update request was picked up, but the server never restarted — the git pull may have failed. Check `journalctl -u holiday-picker-update` on the server.';
+          : '⚠️ The update request was picked up, but the server never restarted — the git pull may have failed. Check `journalctl -u wheel-of-choice-update` on the server.';
       }
     }, UPDATE_POLL_MS);
   }

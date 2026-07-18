@@ -108,7 +108,7 @@ python3 server.py
 
 The repo ships with a tiny [Flask](https://flask.palletsprojects.com)
 server ([`server.py`](server.py)) and a ready-made systemd unit
-([`deploy/holiday-picker.service`](deploy/holiday-picker.service)), so
+([`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service)), so
 deploying to any Linux box — an Ubuntu LXC, VM, Raspberry Pi, … — takes
 three steps:
 
@@ -116,7 +116,7 @@ three steps:
 
 ```bash
 sudo apt update && sudo apt install -y git python3-flask
-sudo git clone https://github.com/bobvmierlo/wheel-of-choice.git /opt/holiday-picker
+sudo git clone https://github.com/bobvmierlo/wheel-of-choice.git /opt/wheel-of-choice
 ```
 
 (Prefer pip? `pip install -r requirements.txt` in a venv works too —
@@ -125,7 +125,7 @@ then adjust `ExecStart` in the unit file to the venv's python.)
 ### 2. Try it
 
 ```bash
-python3 /opt/holiday-picker/server.py
+python3 /opt/wheel-of-choice/server.py
 ```
 
 Open `http://<server-ip>:8000` — you should see the wheel. Ctrl-C to stop.
@@ -133,10 +133,10 @@ Open `http://<server-ip>:8000` — you should see the wheel. Ctrl-C to stop.
 ### 3. Make it a service
 
 ```bash
-sudo cp /opt/holiday-picker/deploy/holiday-picker.service /etc/systemd/system/
+sudo cp /opt/wheel-of-choice/deploy/wheel-of-choice.service /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now holiday-picker
-systemctl status holiday-picker   # should say "active (running)"
+sudo systemctl enable --now wheel-of-choice
+systemctl status wheel-of-choice   # should say "active (running)"
 ```
 
 The service starts on boot, restarts on failure, and runs as an
@@ -145,16 +145,16 @@ unprivileged dynamic user with a read-only view of the system.
 **Updating** to the latest version:
 
 ```bash
-cd /opt/holiday-picker && sudo git pull && sudo systemctl restart holiday-picker
+cd /opt/wheel-of-choice && sudo git pull && sudo systemctl restart wheel-of-choice
 ```
 
 Or let the admin do it from the app: install the updater units once —
 
 ```bash
-sudo cp /opt/holiday-picker/deploy/holiday-picker-update.service \
-        /opt/holiday-picker/deploy/holiday-picker-update.path /etc/systemd/system/
+sudo cp /opt/wheel-of-choice/deploy/wheel-of-choice-update.service \
+        /opt/wheel-of-choice/deploy/wheel-of-choice-update.path /etc/systemd/system/
 sudo systemctl daemon-reload
-sudo systemctl enable --now holiday-picker-update.path
+sudo systemctl enable --now wheel-of-choice-update.path
 ```
 
 — and the 🛠️ Admin panel's "Update & restart server" button does the
@@ -163,10 +163,10 @@ the button drops a flag file in the state directory, which the path unit
 watches and acts on as root.)
 
 **Changing the port**: edit the last line of `server.py`, then
-`sudo systemctl restart holiday-picker`.
+`sudo systemctl restart wheel-of-choice`.
 
 The service stores accounts, wheels and history in
-`/var/lib/holiday-picker/db.json` (via systemd's `StateDirectory`), so
+`/var/lib/wheel-of-choice/db.json` (via systemd's `StateDirectory`), so
 your data survives updates and restarts. Accounts keep casual visitors
 out, but the app still speaks plain HTTP — run it on your home network
 (or behind a reverse proxy with TLS), not naked on the open internet.

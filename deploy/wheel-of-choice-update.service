@@ -1,14 +1,14 @@
 # Self-update for Wheel of Choice.
 #
-# Started by holiday-picker-update.path whenever the app's admin presses
+# Started by wheel-of-choice-update.path whenever the app's admin presses
 # "Update & restart server" (the app writes an update-requested flag file
 # into its state directory — it is sandboxed and can't run git/systemctl
 # itself). Runs as root: pulls the latest version and restarts the app.
 #
 # Install together with the .path unit:
-#   sudo cp deploy/holiday-picker-update.{service,path} /etc/systemd/system/
+#   sudo cp deploy/wheel-of-choice-update.{service,path} /etc/systemd/system/
 #   sudo systemctl daemon-reload
-#   sudo systemctl enable --now holiday-picker-update.path
+#   sudo systemctl enable --now wheel-of-choice-update.path
 
 [Unit]
 Description=Wheel of Choice — pull latest version and restart
@@ -16,6 +16,6 @@ Description=Wheel of Choice — pull latest version and restart
 [Service]
 Type=oneshot
 # Remove the flag first so a failed pull doesn't retrigger in a loop
-ExecStartPre=/bin/rm -f /var/lib/holiday-picker/update-requested
-ExecStart=/usr/bin/git -C /opt/holiday-picker pull --ff-only
-ExecStart=/bin/systemctl restart holiday-picker
+ExecStartPre=/bin/rm -f /var/lib/wheel-of-choice/update-requested
+ExecStart=/usr/bin/git -C /opt/wheel-of-choice pull --ff-only
+ExecStart=/bin/systemctl restart wheel-of-choice

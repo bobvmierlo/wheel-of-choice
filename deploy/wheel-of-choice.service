@@ -1,0 +1,35 @@
+# systemd unit for Wheel of Choice.
+#
+# Assumes the repo lives in /opt/wheel-of-choice and Flask is installed
+# system-wide (apt install python3-flask). Adjust paths if yours differ.
+#
+# Install with:
+#   sudo cp deploy/wheel-of-choice.service /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now wheel-of-choice
+
+[Unit]
+Description=Wheel of Choice — shared decision wheels
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/wheel-of-choice
+ExecStart=/usr/bin/python3 /opt/wheel-of-choice/server.py
+Restart=on-failure
+RestartSec=3
+
+# Wheels & history are stored here (systemd creates the directory at
+# /var/lib/wheel-of-choice and keeps it writable despite the sandboxing)
+StateDirectory=wheel-of-choice
+Environment=WHEEL_DATA_DIR=/var/lib/wheel-of-choice
+
+# Run as an unprivileged throwaway user with a read-only view of the system
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+NoNewPrivileges=yes
+
+[Install]
+WantedBy=multi-user.target
