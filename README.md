@@ -14,9 +14,12 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   places you're already dreaming of) seed your wheels with destinations
   that make sense for you: distances are computed relative to *your*
   home region, far-away places are parked as disabled instead of
-  cluttering the wheel, the best vibe/budget matches are pre-starred as
-  favourites, and the places you picked yourself start starred too —
-  even when they're beyond your roam range.
+  cluttering the wheel, and local gems get switched on for the homes
+  they're near — a Benelux wheel starts with Maastricht and Lille on it,
+  a British one with York and Galway, without either cluttering the
+  other. The best vibe/budget matches are pre-starred as favourites, and
+  the places you picked yourself start starred too — even when they're
+  beyond your roam range.
 - **Sharing** 🔗 — every set of wheels has a share code and an invite
   link, and it isn't limited to couples: three or four friends sharing
   one set of wheels works just as well. Send the link and the account
@@ -162,8 +165,8 @@ out, but the app still speaks plain HTTP — run it on your home network
 ## Seed data & sources
 
 The two starting catalogues —
-[`seed-destinations.json`](seed-destinations.json) (~65 countries) and
-[`seed-citytrips.json`](seed-citytrips.json) (~65 cities) — were
+[`seed-destinations.json`](seed-destinations.json) (~85 countries) and
+[`seed-citytrips.json`](seed-citytrips.json) (~125 cities) — were
 **hand-curated for this app**, not imported from an external dataset.
 The tags are subjective editorial estimates meant to make the wheel
 useful on day one, roughly:
@@ -195,7 +198,9 @@ sites, blogs, hotel pages, …) via ✏️ edit.
   destinations in the app itself (⚙️ Manage destinations). Each entry's
   `near` list names the home regions from which it counts as "regional"
   (reachable by car or train); onboarding recomputes distances from the
-  answers.
+  answers. Entries with `"enabled": false` are niche picks that start
+  off the wheel — except for homes they're regional to, where a local
+  gem starts on it.
 - The tag vocabulary (`budget`, `distance`, `vibes`, `seasons`, `party`)
   and the onboarding vocabulary (home regions, roam ranges) are defined
   at the top of [`server.py`](server.py).

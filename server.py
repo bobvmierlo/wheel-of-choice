@@ -601,7 +601,9 @@ def seed_wheels(home, roam, vibes, budget, favorites=None, user_id=None):
     - destinations beyond the chosen roam range are kept but disabled,
       so they stay discoverable in the manage panel
     - catalogue entries marked "enabled": false are niche picks that also
-      start off the wheel (a full catalogue would drown it in segments)
+      start off the wheel (a full catalogue would drown it in segments) —
+      *unless* they're regional from this home: a local gem like
+      Maastricht belongs on a Benelux wheel but not on a Spanish one
     - entries matching the chosen vibes (and budget) get pre-starred
     - `favorites` ({wheel: [ids]}) are places named during onboarding:
       starred *by this user* and enabled even beyond the roam range —
@@ -631,7 +633,8 @@ def seed_wheels(home, roam, vibes, budget, favorites=None, user_id=None):
                 "party": entry["party"],
                 "favorite": False,
                 "starred_by": [],
-                "enabled": distance in allowed and entry.get("enabled", True),
+                "enabled": distance in allowed
+                and (entry.get("enabled", True) or distance == "regional"),
                 "notes": entry.get("notes", ""),
                 "links": entry.get("links") or default_links(entry["name"]),
             })
