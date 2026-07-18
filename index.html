@@ -5,6 +5,14 @@
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Wheel of Choice · Spin away your indecision</title>
   <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎡</text></svg>">
+  <!-- PWA: installable on a phone's home screen, which is also what
+       unlocks push notifications on iOS (16.4+) -->
+  <link rel="manifest" href="manifest.json">
+  <meta name="theme-color" content="#1b1035">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Wheel">
   <link rel="stylesheet" href="styles.css">
 </head>
 <body>
@@ -13,6 +21,7 @@
     <div class="account-bar" id="account-bar" hidden>
       <span class="account-name" id="account-name"></span>
       <button type="button" class="btn btn-ghost btn-small" id="admin-btn" hidden>🛠️ Admin</button>
+      <button type="button" class="btn btn-ghost btn-small" id="notify-btn" title="Notifications" hidden>🔔</button>
       <button type="button" class="btn btn-ghost btn-small" id="share-btn" hidden>🔗 Share</button>
       <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
     </div>
@@ -332,6 +341,34 @@
     <p class="share-leave-row">
       <button type="button" class="linklike" id="leave-btn">Leave this wheel…</button>
     </p>
+  </dialog>
+
+  <!-- ── Notifications modal ────────────────────────────────────────── -->
+  <dialog id="notify-modal" class="modal share-modal">
+    <div class="manage-header">
+      <h2>🔔 Notifications</h2>
+      <button type="button" class="btn btn-ghost" id="close-notify-btn">Close</button>
+    </div>
+    <p class="manage-hint">Get a ping on this device when something happens on one of
+      your wheels — someone spins and waits for your thumbs-up, a pick gets vetoed, or
+      the decision is final. Works even when the app is closed; each device that should
+      buzz turns this on for itself.</p>
+    <p class="push-state" id="notify-state" role="status"></p>
+    <div class="notify-install" id="notify-ios-hint" hidden>
+      <p>📲 On an iPhone or iPad, notifications only work once the app is on your
+        Home Screen (iOS 16.4 or newer):</p>
+      <ol>
+        <li>Open this site in <strong>Safari</strong></li>
+        <li>Tap the <strong>Share</strong> button</li>
+        <li>Choose <strong>Add to Home Screen</strong></li>
+        <li>Open the 🎡 app from your Home Screen and tap 🔔 again</li>
+      </ol>
+    </div>
+    <div class="form-actions notify-actions">
+      <button type="button" class="btn btn-primary" id="notify-enable" hidden>🔔 Turn on for this device</button>
+      <button type="button" class="btn btn-ghost" id="notify-disable" hidden>🔕 Turn off for this device</button>
+    </div>
+    <p class="form-error" id="notify-error" role="alert"></p>
   </dialog>
 
   <!-- ── Admin modal ────────────────────────────────────────────────── -->

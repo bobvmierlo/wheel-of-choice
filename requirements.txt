@@ -1,1 +1,3 @@
 flask>=3.0
+# optional — only needed for push notifications (see README):
+pywebpush>=2.0

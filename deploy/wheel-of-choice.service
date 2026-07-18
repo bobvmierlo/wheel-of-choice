@@ -24,6 +24,11 @@ RestartSec=3
 StateDirectory=wheel-of-choice
 Environment=WHEEL_DATA_DIR=/var/lib/wheel-of-choice
 
+# Push notifications (optional — needs pywebpush installed, see the
+# README): set a real way to reach you; Apple/Google may use it to
+# flag delivery problems with your server's pushes.
+#Environment=VAPID_SUBJECT=mailto:you@example.com
+
 # Run as an unprivileged throwaway user with a read-only view of the system
 DynamicUser=yes
 ProtectSystem=strict

@@ -329,6 +329,8 @@
   function applyMe() {
     accountName.textContent = `👤 ${me.user.name}`;
     adminBtn.hidden = !me.user.admin;
+    notifyBtn.hidden = false;
+    syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
     const invite = inviteCode;
     inviteCode = '';
     inviteBanner.hidden = true;
@@ -486,6 +488,15 @@
   });
 
   logoutBtn.addEventListener('click', async () => {
+    try {
+      // this device shouldn't keep buzzing for an account it logged out of
+      const sub = await pushSubscription();
+      if (sub) {
+        await rootApi('/push/unsubscribe', {
+          method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }),
+        });
+      }
+    } catch { /* logging out anyway */ }
     try { await rootApi('/auth/logout', { method: 'POST' }); } catch { /* logging out anyway */ }
     forceLogout();
   });
@@ -799,6 +810,155 @@
     } catch (err) {
       shareError.textContent = `⚠️ ${err.message}`;
     }
+  });
+
+  // ── Push notifications ────────────────────────────────────────────
+  // Web Push, the standard flavour: the server signs every push with
+  // its own VAPID key and talks directly to whatever endpoint the
+  // browser hands us — Apple's for iPhones, Google's for Chrome,
+  // Mozilla's for Firefox. No Firebase, no accounts with anyone.
+  // On iOS (16.4+) push only works once the app is on the Home Screen,
+  // so the modal walks people through Add to Home Screen first.
+  const notifyBtn = document.getElementById('notify-btn');
+  const notifyModal = document.getElementById('notify-modal');
+  const closeNotifyBtn = document.getElementById('close-notify-btn');
+  const notifyState = document.getElementById('notify-state');
+  const notifyEnable = document.getElementById('notify-enable');
+  const notifyDisable = document.getElementById('notify-disable');
+  const notifyIosHint = document.getElementById('notify-ios-hint');
+  const notifyError = document.getElementById('notify-error');
+
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1); // iPadOS masquerades as a Mac
+  const isStandalone = window.matchMedia('(display-mode: standalone)').matches ||
+    window.navigator.standalone === true;
+
+  function pushSupported() {
+    return 'serviceWorker' in navigator && 'PushManager' in window && 'Notification' in window;
+  }
+
+  if ('serviceWorker' in navigator) {
+    // the worker only handles push — it never intercepts requests, so
+    // the app keeps loading fresh from the server
+    navigator.serviceWorker.register('sw.js').catch(console.error);
+  }
+
+  function urlBase64ToUint8Array(base64) {
+    const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+    const raw = atob(padded.replace(/-/g, '+').replace(/_/g, '/'));
+    return Uint8Array.from(raw, (c) => c.charCodeAt(0));
+  }
+
+  async function pushSubscription() {
+    if (!pushSupported()) return null;
+    const reg = await navigator.serviceWorker.ready;
+    return reg.pushManager.getSubscription();
+  }
+
+  // Called after login: re-registers this device's subscription under
+  // the account that just logged in, so a browser-rotated subscription
+  // (or a shared family tablet) ends up buzzing for the right person.
+  async function syncPushSubscription() {
+    if (!pushSupported() || Notification.permission !== 'granted') return;
+    try {
+      const sub = await pushSubscription();
+      if (sub) {
+        await rootApi('/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+      }
+    } catch { /* notifications are a nicety — never block login on them */ }
+  }
+
+  async function renderNotifyModal() {
+    notifyError.textContent = '';
+    notifyEnable.hidden = true;
+    notifyDisable.hidden = true;
+    notifyIosHint.hidden = true;
+    if (!pushSupported()) {
+      if (isIOS && !isStandalone) {
+        notifyState.textContent = '📲 One step to go — this needs the app on your Home Screen:';
+        notifyIosHint.hidden = false;
+      } else {
+        notifyState.textContent = "📴 This browser doesn't support push notifications.";
+      }
+      return;
+    }
+    let server;
+    try {
+      server = await rootApi('/push/status');
+    } catch (err) {
+      notifyState.textContent = `⚠️ ${err.message}`;
+      return;
+    }
+    if (!server.enabled) {
+      notifyState.textContent = "📴 The server can't send notifications yet — the README's " +
+        'notifications section explains the one-time setup (install pywebpush, restart).';
+      return;
+    }
+    if (Notification.permission === 'denied') {
+      notifyState.textContent = '🔕 Notifications are blocked for this site — allow them again ' +
+        'in your browser or system settings, then come back here.';
+      return;
+    }
+    const sub = await pushSubscription().catch(() => null);
+    if (sub && Notification.permission === 'granted') {
+      notifyState.textContent = '✅ Notifications are on for this device.';
+      notifyDisable.hidden = false;
+    } else {
+      notifyState.textContent = '💤 Notifications are off for this device.';
+      notifyEnable.hidden = false;
+    }
+  }
+
+  notifyBtn.addEventListener('click', () => {
+    notifyModal.showModal();
+    renderNotifyModal();
+  });
+  closeNotifyBtn.addEventListener('click', () => notifyModal.close());
+
+  notifyEnable.addEventListener('click', async () => {
+    notifyError.textContent = '';
+    notifyEnable.disabled = true;
+    try {
+      const server = await rootApi('/push/status');
+      if (!server.enabled) throw new Error('the server has push notifications disabled');
+      // must happen in this click handler — browsers only show the
+      // permission prompt straight from a user gesture
+      if (await Notification.requestPermission() !== 'granted') {
+        throw new Error("permission wasn't granted");
+      }
+      const reg = await navigator.serviceWorker.ready;
+      let sub = await reg.pushManager.getSubscription();
+      if (!sub) {
+        sub = await reg.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey: urlBase64ToUint8Array(server.public_key),
+        });
+      }
+      await rootApi('/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+    } catch (err) {
+      console.error(err);
+      notifyError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      notifyEnable.disabled = false;
+      renderNotifyModal();
+    }
+  });
+
+  notifyDisable.addEventListener('click', async () => {
+    notifyError.textContent = '';
+    try {
+      const sub = await pushSubscription();
+      if (sub) {
+        await rootApi('/push/unsubscribe', {
+          method: 'POST', body: JSON.stringify({ endpoint: sub.endpoint }),
+        }).catch(() => {}); // browser-side unsubscribe matters more
+        await sub.unsubscribe();
+      }
+    } catch (err) {
+      console.error(err);
+      notifyError.textContent = `⚠️ ${err.message}`;
+    }
+    renderNotifyModal();
   });
 
   // ── Admin modal ───────────────────────────────────────────────────
