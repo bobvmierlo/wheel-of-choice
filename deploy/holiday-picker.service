@@ -1,4 +1,4 @@
-# systemd unit for the Wheel of Wander holiday picker.
+# systemd unit for Wheel of Choice (historically: Wheel of Wander / holiday-picker).
 #
 # Assumes the repo lives in /opt/holiday-picker and Flask is installed
 # system-wide (apt install python3-flask). Adjust paths if yours differ.
@@ -9,7 +9,7 @@
 #   sudo systemctl enable --now holiday-picker
 
 [Unit]
-Description=Wheel of Wander — holiday destination picker
+Description=Wheel of Choice — shared decision wheels
 After=network.target
 
 [Service]

@@ -7,13 +7,19 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
 > **A note on the name**: this project started life as *Wheel of Wander /
 > holiday-picker*, a holiday destination picker for two. It has since
 > outgrown that: wheels are now independent, individually shareable, and
-> not just about travel (there's a restaurant wheel type). The app now
-> calls itself **Wheel of Choice**; the GitHub repository is still named
-> `holiday-picker` and can be renamed (e.g. to `wheel-of-choice`) in the
-> repo settings — GitHub redirects the old URL, but the clone path in the
-> deploy instructions below and the git remote on any existing server
-> should be updated when you do. The systemd units keep the
-> `holiday-picker` name so existing installs keep working.
+> not just about travel (there's a restaurant wheel type) — so both the
+> app and the repository are now called **wheel-of-choice**. GitHub
+> redirects the old `holiday-picker` URLs, so existing clones keep
+> working; still, it's tidiest to point them at the new URL once:
+>
+> ```bash
+> git remote set-url origin https://github.com/bobvmierlo/wheel-of-choice.git
+> ```
+>
+> The systemd units and the install paths (`/opt/holiday-picker`,
+> `/var/lib/holiday-picker`) keep their historical names on purpose:
+> renaming them would break existing installs (and orphan their data)
+> for a purely cosmetic win.
 
 ## Features
 
@@ -127,7 +133,7 @@ three steps:
 
 ```bash
 sudo apt update && sudo apt install -y git python3-flask
-sudo git clone https://github.com/bobvmierlo/holiday-picker.git /opt/holiday-picker
+sudo git clone https://github.com/bobvmierlo/wheel-of-choice.git /opt/holiday-picker
 ```
 
 (Prefer pip? `pip install -r requirements.txt` in a venv works too —

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Flask server for Wheel of Wander.
+"""Flask server for Wheel of Choice.
 
 Serves the static site plus a small JSON API. Since v3 the app is built
 around stand-alone *wheels*: every wheel is its own little world — a
@@ -733,7 +733,7 @@ def admin_backup():
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     response = app.response_class(payload, mimetype="application/json")
     response.headers["Content-Disposition"] = (
-        f"attachment; filename=wheel-of-wander-backup-{stamp}.json"
+        f"attachment; filename=wheel-of-choice-backup-{stamp}.json"
     )
     return response
 
@@ -749,7 +749,7 @@ def admin_restore():
     if not isinstance(payload, dict) or not all(
         isinstance(payload.get(key), dict) for key in ("users", "sessions")
     ) or not any(isinstance(payload.get(key), dict) for key in ("wheels", "spaces")):
-        abort(400, description="that doesn't look like a Wheel of Wander backup")
+        abort(400, description="that doesn't look like a Wheel of Choice backup")
     header = request.headers.get("Authorization", "")
     token = header[7:] if header.startswith("Bearer ") else ""
     with _lock:

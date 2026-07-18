@@ -1,4 +1,4 @@
-# Self-update for the Wheel of Wander holiday picker.
+# Self-update for Wheel of Choice.
 #
 # Started by holiday-picker-update.path whenever the app's admin presses
 # "Update & restart server" (the app writes an update-requested flag file
@@ -11,7 +11,7 @@
 #   sudo systemctl enable --now holiday-picker-update.path
 
 [Unit]
-Description=Wheel of Wander — pull latest version and restart
+Description=Wheel of Choice — pull latest version and restart
 
 [Service]
 Type=oneshot
