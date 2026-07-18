@@ -529,6 +529,20 @@ body {
 .share-members { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 1.2rem; }
 .share-modal h3 { font-size: 0.95rem; margin: 0.6rem 0 0.3rem; padding-top: 0.8rem; border-top: 1px solid var(--panel-border); }
 .share-leave-row { margin-top: 1rem; }
+
+/* ── Notifications modal ───────────────────────────────────────────── */
+.push-state { font-weight: 600; margin: 0.2rem 0 0.8rem; min-height: 1.3em; }
+.notify-install {
+  background: rgba(255, 184, 77, 0.08);
+  border: 1px solid rgba(255, 184, 77, 0.35);
+  border-radius: 12px;
+  padding: 0.7rem 0.9rem;
+  font-size: 0.85rem;
+  line-height: 1.5;
+  margin-bottom: 1rem;
+}
+.notify-install ol { margin: 0.4rem 0 0.2rem; padding-left: 1.3rem; }
+.notify-actions { justify-content: center; margin-bottom: 0.6rem; }
 .linklike {
   background: none;
   border: 0;

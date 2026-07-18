@@ -81,6 +81,15 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   planning searches — ✈️ flights and 🛏️ stays for travel wheels, 📍 a
   maps lookup for restaurants; the spin result shows the notes and links
   too, so you can start planning right away.
+- **Push notifications** 🔔 — optional, per device: get a ping when
+  someone spins and waits for your thumbs-up, when a pick gets vetoed,
+  and when the decision is final — even with the app closed. Standard
+  Web Push straight from your own server (no Firebase, no accounts with
+  anyone); works on Android and, as a Home-Screen app, on iOS 16.4+.
+  Setup in [Push notifications](#-push-notifications-optional).
+- **Installable** 📲 — the app is a PWA: add it to your phone's home
+  screen and it opens full-screen with its own icon, like an app-store
+  app — without the app store.
 - **Admin** 🛠️ — the first account ever registered runs the place: it can
   make other users admin, pull someone out of every wheel they share,
   delete accounts, download or restore a full backup of the database,
@@ -88,7 +97,7 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
 
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions (expiring after 90
-days), and every wheel. Only your login token stays in the browser. The
+days), push subscriptions, and every wheel. Only your login token stays in the browser. The
 admin panel can download that file as a backup and restore one later.
 Older databases are migrated automatically: the shared *spaces* of v2
 are split into independent wheels (the old space code keeps working — it
@@ -170,6 +179,89 @@ The service stores accounts, wheels and history in
 your data survives updates and restarts. Accounts keep casual visitors
 out, but the app still speaks plain HTTP — run it on your home network
 (or behind a reverse proxy with TLS), not naked on the open internet.
+
+## 🔔 Push notifications (optional)
+
+The app can ping members' phones when something happens on a shared
+wheel: *"🎡 Emma spun 🇵🇹 Portugal — are you in, or is this your veto?"*,
+*"🙅 Bob vetoed 🇫🇷 France — spin again!"*, *"🎉 🇮🇹 Italy it is!"*. It
+uses **standard Web Push with VAPID keys**, which means:
+
+- your server signs every message itself and sends it **directly** to
+  the push endpoint each browser registers — Apple's relay for iPhones,
+  Google's for Chrome, Mozilla's for Firefox. There is **no Firebase
+  project, no Google/Apple developer account, and nothing to sign up
+  for** — the messages do pass through the platform relay (that's how
+  phones get woken), but they're end-to-end encrypted, so the relay only
+  sees ciphertext;
+- everything else stays on your box: subscriptions live in `db.json`,
+  and the signing key is a single PEM file in the data directory.
+
+### One-time server setup
+
+1. **Install [pywebpush](https://github.com/web-push-libs/pywebpush)**
+   next to Flask (without it the app runs fine, just without pushes):
+
+   ```bash
+   sudo pip3 install pywebpush        # add --break-system-packages on Debian 12+
+   # or, if you run the server from a venv: pip install -r requirements.txt
+   ```
+
+2. **Set a contact address** (optional but recommended): the VAPID
+   `sub` claim tells the push relays how to reach you if your server
+   misbehaves. Uncomment the `VAPID_SUBJECT` line in
+   [`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service)
+   and put your own `mailto:` address in, or export it before running
+   `server.py` by hand.
+
+3. **Restart the server.** That's it — the VAPID keypair is generated
+   automatically on first use and stored as `vapid-private-key.pem`
+   next to `db.json`. **Keep that file**: it's what all subscriptions
+   are bound to, and losing it (e.g. wiping the data dir) silently
+   breaks every enabled device until people toggle 🔔 off and on again.
+
+### The HTTPS requirement
+
+Push (and service workers in general) only work on a **secure origin**:
+`http://localhost` is fine for development, but phones need the real
+site served over **HTTPS with a certificate they trust**. A self-signed
+certificate on a LAN IP won't cut it on an iPhone — the practical route
+for a self-hosted box is a (sub)domain pointing at it and a reverse
+proxy that does TLS, e.g. [Caddy](https://caddyserver.com) (automatic
+Let's Encrypt) or nginx + certbot, forwarding to `localhost:8000`. Your
+server also needs *outbound* HTTPS to the push relays
+(`web.push.apple.com`, `fcm.googleapis.com`, …) — no inbound ports
+beyond your proxy.
+
+### Turning it on, per device
+
+Everyone chooses per device — notifications are personal, not
+per wheel:
+
+- **Android** (Chrome, Firefox, …): open the site, log in, tap **🔔** in
+  the top bar → *Turn on for this device*. Installing the app
+  (browser menu → *Add to Home Screen / Install app*) is optional but
+  nice.
+- **iPhone / iPad** (iOS 16.4 or newer): Apple only allows Web Push for
+  installed web apps, so first open the site in **Safari** → Share →
+  **Add to Home Screen**. Then open the 🎡 app *from the Home Screen*,
+  log in, tap **🔔** → *Turn on for this device*, and allow the
+  permission prompt. (In a plain Safari tab the 🔔 dialog shows these
+  same steps instead of the button.)
+
+### Troubleshooting
+
+- *The 🔔 dialog says the server can't send notifications* — pywebpush
+  isn't installed (or the server wasn't restarted after installing it).
+- *No permission prompt on an iPhone* — the app wasn't opened from the
+  Home Screen icon, or iOS is older than 16.4.
+- *Notifications stopped after restoring a backup onto a fresh box* —
+  restore `vapid-private-key.pem` along with `db.json`, or have
+  everyone toggle 🔔 off and on again.
+- *One device went quiet* — browsers rotate or expire subscriptions now
+  and then. The app re-registers on every login and the server drops
+  dead endpoints automatically, so a visit to the app usually heals it;
+  otherwise toggle 🔔 off and on.
 
 ## Seed data & sources
 
