@@ -388,6 +388,11 @@
     <!-- propose mode: pick candidate evenings from a grid -->
     <div id="poll-propose" hidden>
       <div class="cal-legend" id="poll-legend"></div>
+      <div class="date-grid-nav">
+        <button type="button" class="btn btn-ghost btn-small" id="date-prev-btn" aria-label="Previous month">‹</button>
+        <span class="date-grid-month" id="date-month" aria-live="polite"></span>
+        <button type="button" class="btn btn-ghost btn-small" id="date-next-btn" aria-label="Next month">›</button>
+      </div>
       <div class="date-grid-head" aria-hidden="true">
         <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span>
         <span>Fri</span><span>Sat</span><span>Sun</span>

@@ -561,6 +561,17 @@ body {
 .cal-dot.busy { background: var(--accent); }
 .cal-dot.free { background: #6ee7a8; }
 
+.date-grid-nav {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-bottom: 0.5rem;
+}
+.date-grid-month { font-weight: 600; font-size: 0.95rem; }
+.date-grid-nav .btn { min-width: 2.2rem; padding: 0.2rem 0.6rem; font-size: 1.1rem; line-height: 1; }
+.date-grid-nav .btn:disabled { opacity: 0.3; cursor: default; }
+
 .date-grid-head, .date-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);

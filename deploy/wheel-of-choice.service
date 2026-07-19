@@ -34,6 +34,10 @@ Environment=WHEEL_DATA_DIR=/var/lib/wheel-of-choice
 # are worked out in local time, so set your own if it isn't Amsterdam.
 #Environment=WHEEL_TZ=Europe/Amsterdam
 
+# Which local hour a "busy evening" starts (0–23, default 17). Nudge it
+# earlier or later to match when your group actually eats out.
+#Environment=WHEEL_EVENING_FROM=17
+
 # Run as an unprivileged throwaway user with a read-only view of the system
 DynamicUser=yes
 ProtectSystem=strict

@@ -991,16 +991,20 @@
   const pollLegend = document.getElementById('poll-legend');
   const pollVoteLegend = document.getElementById('poll-vote-legend');
   const dateGrid = document.getElementById('date-grid');
+  const dateMonth = document.getElementById('date-month');
+  const datePrevBtn = document.getElementById('date-prev-btn');
+  const dateNextBtn = document.getElementById('date-next-btn');
   const pollCreateBtn = document.getElementById('poll-create-btn');
   const pollRows = document.getElementById('poll-rows');
   const pollFoot = document.getElementById('poll-foot');
   const pollScrapBtn = document.getElementById('poll-scrap-btn');
   const pollError = document.getElementById('poll-error');
 
-  const GRID_WEEKS = 5;  // weeks shown in the propose grid (≈ a month ahead)
+  const POLL_HORIZON_DAYS = 60;  // how far ahead a poll can reach — must match the server
 
   let pollEntryId = null;
   let pollSelected = new Set();  // candidate dates while proposing
+  let pollViewMonth = null;      // first day of the month shown in the propose grid
   let myVote = new Set();        // this member's ticks while voting
   let pollAvail = {};            // date → 'busy'|'free'|'unknown' (viewer's own)
   let pollLinked = false;        // viewer has a calendar linked
@@ -1112,7 +1116,7 @@
     pollCalEnabled = false;
     try {
       const today = new Date(); today.setHours(0, 0, 0, 0);
-      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=${GRID_WEEKS * 7}`);
+      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=${POLL_HORIZON_DAYS}`);
       pollCalEnabled = !!(av && av.enabled);
       pollLinked = !!(av && av.linked);
       if (pollLinked && av.days) pollAvail = av.days;
@@ -1140,20 +1144,37 @@
     if (!pollModal.open) pollModal.showModal();
   }
 
+  function monthStart(d) {
+    return new Date(d.getFullYear(), d.getMonth(), 1);
+  }
+
+  // The propose grid pages a month at a time. Days before today or beyond
+  // the poll horizon are shown but disabled, and the ‹ › buttons stop at
+  // those same bounds so you can only land on dates a poll would accept.
   function buildDateGrid() {
     dateGrid.innerHTML = '';
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const todayIso = isoLocal(today);
-    const start = new Date(today);
-    start.setDate(today.getDate() - ((today.getDay() + 6) % 7));  // Monday of this week
-    for (let i = 0; i < GRID_WEEKS * 7; i++) {
-      const day = new Date(start); day.setDate(start.getDate() + i);
+    const horizon = new Date(today); horizon.setDate(today.getDate() + POLL_HORIZON_DAYS);
+    const horizonIso = isoLocal(horizon);
+    if (!pollViewMonth) pollViewMonth = monthStart(today);
+
+    const first = pollViewMonth;
+    const lead = (first.getDay() + 6) % 7;  // blank cells before the 1st (Monday-first)
+    const daysInMonth = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+    for (let i = 0; i < lead; i++) {
+      const blank = document.createElement('div');
+      blank.className = 'day-cell empty';
+      dateGrid.append(blank);
+    }
+    for (let d = 1; d <= daysInMonth; d++) {
+      const day = new Date(first.getFullYear(), first.getMonth(), d);
       const iso = isoLocal(day);
       const cell = document.createElement('button');
       cell.type = 'button';
       cell.className = 'day-cell';
-      cell.textContent = String(day.getDate());
-      if (iso < todayIso) {
+      cell.textContent = String(d);
+      if (iso < todayIso || iso > horizonIso) {
         cell.disabled = true;
       } else {
         cell.dataset.date = iso;
@@ -1169,6 +1190,16 @@
       }
       dateGrid.append(cell);
     }
+
+    dateMonth.textContent = first.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+    datePrevBtn.disabled = first <= monthStart(today);
+    dateNextBtn.disabled = new Date(first.getFullYear(), first.getMonth() + 1, 1) > horizon;
+  }
+
+  function shiftPollMonth(delta) {
+    const base = pollViewMonth || monthStart(new Date());
+    pollViewMonth = new Date(base.getFullYear(), base.getMonth() + delta, 1);
+    buildDateGrid();
   }
 
   function syncCreateBtn() {
@@ -1181,6 +1212,7 @@
     pollTitle.textContent = '🗳️ Find an evening';
     pollSub.textContent = `Pick the evenings that could work for ${entry.flag} ${entry.name}, then put them to the group.`;
     pollSelected = new Set();
+    pollViewMonth = null;  // always open on the current month
     setPollLegend(pollLegend);
     buildDateGrid();
     syncCreateBtn();
@@ -1330,6 +1362,9 @@
       syncCreateBtn();
     }
   });
+
+  datePrevBtn.addEventListener('click', () => shiftPollMonth(-1));
+  dateNextBtn.addEventListener('click', () => shiftPollMonth(1));
 
   pollScrapBtn.addEventListener('click', scrapPoll);
   closePollBtn.addEventListener('click', () => pollModal.close());
@@ -2008,6 +2043,13 @@
         state.history = res.history;
         renderHistory();
         wheelHint.textContent = finalMessage(result);
+        // A restaurant pick's next step is settling an evening, so take the
+        // spinner straight into the date poll instead of making them dig it
+        // out of the history. Travel picks book instead — no poll for them.
+        if (!isTravelWheel()) {
+          const entry = res.history.find((e) => e.dest_id === result.id);
+          if (entry) openPollModal(entry, 'propose');
+        }
       } else {
         wheelHint.textContent = `Waiting for ${waitingNames(res.round.pending)} to okay ${result.flag} ${result.name} — they can still veto ✋`;
       }

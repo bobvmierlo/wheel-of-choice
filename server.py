@@ -125,7 +125,19 @@ SESSION_TTL_DAYS = 90  # log-ins older than this expire
 POLL_MAX_DATES = 10  # candidate dates a proposer may put up
 POLL_HORIZON_DAYS = 60  # how far ahead a poll (and calendar lookahead) reaches
 LOCAL_TZ = ZoneInfo(os.environ.get("WHEEL_TZ", "Europe/Amsterdam"))
-EVENING_FROM = 17  # local hour a dinner evening starts (17:00–23:59 counts as busy)
+
+
+def _evening_from():
+    """Local hour a dinner evening starts — everything from here to
+    midnight counts as a busy evening. Configurable via WHEEL_EVENING_FROM
+    (0–23); a missing or bogus value falls back to 17:00."""
+    try:
+        return min(23, max(0, int(os.environ.get("WHEEL_EVENING_FROM", "17"))))
+    except (TypeError, ValueError):
+        return 17
+
+
+EVENING_FROM = _evening_from()  # 17:00–23:59 counts as busy, unless overridden
 
 # Personal calendar feeds (secret ICS URLs) power the poll's busy/free hints.
 # Read-only, per user, never shown to anyone else — see the README.

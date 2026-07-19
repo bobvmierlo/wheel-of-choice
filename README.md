@@ -303,11 +303,14 @@ sudo pip3 install icalendar recurring-ical-events   # --break-system-packages on
 # or, from a venv: pip install -r requirements.txt
 ```
 
-Busy evenings are judged in local time (17:00–midnight). If your server
-isn't on Amsterdam time, set your zone — uncomment `WHEEL_TZ` in
-[`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service) (any
+Busy evenings are judged in local time (17:00–midnight by default). If
+your server isn't on Amsterdam time, set your zone — uncomment `WHEEL_TZ`
+in [`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service) (any
 [IANA name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
-like `Europe/London` or `America/New_York`), then restart.
+like `Europe/London` or `America/New_York`), then restart. To move where
+the evening starts — an early-bird crowd, or a later-dinner one — set
+`WHEEL_EVENING_FROM` to the local hour (0–23, default `17`); every event
+from that hour to midnight then counts as a busy evening.
 
 **Where each provider hides the secret address:**
 
@@ -338,7 +341,8 @@ each member does this on their own account.
   to your own timezone and restart.
 - *All-day events don't mark me busy* — on purpose: birthday and
   public-holiday calendars would otherwise paint whole weeks red. Only
-  timed evening events (17:00 onward) count.
+  timed evening events (from `WHEEL_EVENING_FROM`, 17:00 by default,
+  onward) count.
 
 ## Seed data & sources
 
