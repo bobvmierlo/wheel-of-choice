@@ -34,9 +34,12 @@ Environment=WHEEL_DATA_DIR=/var/lib/wheel-of-choice
 # are worked out in local time, so set your own if it isn't Amsterdam.
 #Environment=WHEEL_TZ=Europe/Amsterdam
 
-# Which local hour a "busy evening" starts (0–23, default 17). Nudge it
-# earlier or later to match when your group actually eats out.
+# Starting defaults for the two date-poll knobs (both also tunable live in
+# 🛠️ Admin → Date polls, which overrides these): which local hour a "busy
+# evening" starts (0–23, default 17), and how far ahead a poll may reach
+# (7–365 days, default 60).
 #Environment=WHEEL_EVENING_FROM=17
+#Environment=WHEEL_POLL_HORIZON_DAYS=60
 
 # Run as an unprivileged throwaway user with a read-only view of the system
 DynamicUser=yes

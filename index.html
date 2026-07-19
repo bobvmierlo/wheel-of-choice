@@ -450,6 +450,31 @@
       pull someone out of all the wheels they share with others (they keep their
       account and any wheels of their own), or delete an account for good.</p>
     <ul id="admin-user-list" class="dest-list admin-list"></ul>
+    <h3>Date polls</h3>
+    <p class="manage-hint">Tune the restaurant date polls for everyone on this server.
+      Changes apply to new and in-progress polls straight away.</p>
+    <div class="admin-settings">
+      <label class="admin-setting">
+        <span class="admin-setting-label">🌆 Evenings start at</span>
+        <span class="admin-setting-field">
+          <input type="number" id="setting-evening-from" min="0" max="23" step="1" inputmode="numeric">
+          <span class="admin-setting-suffix">:00</span>
+        </span>
+        <span class="admin-setting-hint">Events from this hour until midnight count as a busy evening (0–23).</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">📅 Polls reach ahead</span>
+        <span class="admin-setting-field">
+          <input type="number" id="setting-horizon" min="7" max="365" step="1" inputmode="numeric">
+          <span class="admin-setting-suffix">days</span>
+        </span>
+        <span class="admin-setting-hint">How far into the future candidate evenings can be put up (7–365).</span>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary btn-small" id="settings-save-btn">Save poll settings</button>
+      </div>
+      <p class="update-status" id="settings-status" role="status"></p>
+    </div>
     <h3>Backup</h3>
     <p class="manage-hint">Everything — accounts, wheels, history — lives in one
       <code>db.json</code> on the server. Download a copy now and then; restoring

@@ -123,21 +123,69 @@ SESSION_TTL_DAYS = 90  # log-ins older than this expire
 # evening. A poll lives on the history entry, so it syncs, dies and clears
 # with the entry. The evening window is what "busy" means for a dinner.
 POLL_MAX_DATES = 10  # candidate dates a proposer may put up
-POLL_HORIZON_DAYS = 60  # how far ahead a poll (and calendar lookahead) reaches
 LOCAL_TZ = ZoneInfo(os.environ.get("WHEEL_TZ", "Europe/Amsterdam"))
 
+# Two poll knobs are admin-tunable at runtime (Admin → Date polls), stored
+# in the db under "settings". The env vars below are only the *defaults*
+# used until an admin overrides them — an admin change wins and persists.
+EVENING_FROM_MIN, EVENING_FROM_MAX = 0, 23  # a local hour
+HORIZON_MIN, HORIZON_MAX = 7, 365  # days a poll can reach ahead
 
-def _evening_from():
-    """Local hour a dinner evening starts — everything from here to
-    midnight counts as a busy evening. Configurable via WHEEL_EVENING_FROM
-    (0–23); a missing or bogus value falls back to 17:00."""
+
+def clamp_evening_from(value, fallback):
+    """Local hour (0–23) a dinner evening starts — everything from here to
+    midnight counts as busy. A missing or bogus value falls back."""
     try:
-        return min(23, max(0, int(os.environ.get("WHEEL_EVENING_FROM", "17"))))
+        return min(EVENING_FROM_MAX, max(EVENING_FROM_MIN, int(value)))
     except (TypeError, ValueError):
-        return 17
+        return fallback
 
 
-EVENING_FROM = _evening_from()  # 17:00–23:59 counts as busy, unless overridden
+def clamp_horizon(value, fallback):
+    """How far ahead (in days) a poll and the calendar lookahead reach.
+    A missing or bogus value falls back."""
+    try:
+        return min(HORIZON_MAX, max(HORIZON_MIN, int(value)))
+    except (TypeError, ValueError):
+        return fallback
+
+
+# Env-var defaults (WHEEL_EVENING_FROM, WHEEL_POLL_HORIZON_DAYS) seed the
+# settings; the built-in fallbacks are 17:00 and 60 days.
+DEFAULT_EVENING_FROM = clamp_evening_from(os.environ.get("WHEEL_EVENING_FROM"), 17)
+DEFAULT_POLL_HORIZON_DAYS = clamp_horizon(os.environ.get("WHEEL_POLL_HORIZON_DAYS"), 60)
+
+# Effective values in force right now. load_db() refreshes these from the
+# stored settings on every request, so they always mirror what the admin
+# last saved (and survive restarts and restores).
+EVENING_FROM = DEFAULT_EVENING_FROM
+POLL_HORIZON_DAYS = DEFAULT_POLL_HORIZON_DAYS
+
+
+def settings_view(db):
+    """The admin-tunable poll settings, plus the defaults to reset to."""
+    stored = db.get("settings") or {}
+    return {
+        "evening_from": clamp_evening_from(stored.get("evening_from"), DEFAULT_EVENING_FROM),
+        "poll_horizon_days": clamp_horizon(stored.get("poll_horizon_days"), DEFAULT_POLL_HORIZON_DAYS),
+        "defaults": {
+            "evening_from": DEFAULT_EVENING_FROM,
+            "poll_horizon_days": DEFAULT_POLL_HORIZON_DAYS,
+        },
+        "bounds": {
+            "evening_from": [EVENING_FROM_MIN, EVENING_FROM_MAX],
+            "poll_horizon_days": [HORIZON_MIN, HORIZON_MAX],
+        },
+    }
+
+
+def apply_runtime_settings(db):
+    """Mirror the stored poll settings into the module-level globals the
+    rest of the server reads. Cheap enough to run on every db load."""
+    global EVENING_FROM, POLL_HORIZON_DAYS
+    view = settings_view(db)
+    EVENING_FROM = view["evening_from"]
+    POLL_HORIZON_DAYS = view["poll_horizon_days"]
 
 # Personal calendar feeds (secret ICS URLs) power the poll's busy/free hints.
 # Read-only, per user, never shown to anyone else — see the README.
@@ -307,11 +355,13 @@ def migrate_db(db):
 
 def load_db():
     if not DB_FILE.exists():
+        apply_runtime_settings({})
         return {"version": 3, "users": {}, "sessions": {}, "wheels": {}}
     db = json.loads(DB_FILE.read_text(encoding="utf-8"))
     if db.get("version", 0) < 3:
         db = migrate_db(db)
         save_db(db)
+    apply_runtime_settings(db)  # keep the effective poll knobs in sync
     return ensure_admin(db)
 
 
@@ -907,9 +957,17 @@ def remove_calendar(feed_id):
 def availability():
     """Busy/free per date for the requesting user's own calendars, over a
     window. Only ever the caller's own feeds — a poll's other members see
-    nothing but the ticks people choose to place."""
+    nothing but the ticks people choose to place. The poll horizon and
+    evening hour ride along so the date grid can lay itself out to match
+    whatever the admin has configured."""
+    with _lock:
+        db = load_db()  # refreshes the effective poll knobs from settings
+        user = current_user(db)
+        feeds = [dict(f) for f in user.get("ics_feeds", [])]  # copy, then drop the lock
+    # the two knobs the propose grid needs, echoed in every branch
+    config = {"horizon_days": POLL_HORIZON_DAYS, "evening_from": EVENING_FROM}
     if ICalendar is None:
-        return jsonify({"enabled": False, "linked": False, "days": {}})
+        return jsonify({**config, "enabled": False, "linked": False, "days": {}})
     try:
         start = datetime.strptime(request.args.get("from", ""), "%Y-%m-%d").date()
     except ValueError:
@@ -918,18 +976,14 @@ def availability():
         span = max(1, min(POLL_HORIZON_DAYS, int(request.args.get("days", 28))))
     except (TypeError, ValueError):
         span = 28
-    with _lock:
-        db = load_db()
-        user = current_user(db)
-        feeds = [dict(f) for f in user.get("ics_feeds", [])]  # copy, then drop the lock
     if not feeds:
-        return jsonify({"enabled": True, "linked": False, "days": {}})
+        return jsonify({**config, "enabled": True, "linked": False, "days": {}})
     busy, readable = busy_evenings_for(feeds)  # network I/O, no _lock held
     days = {}
     for i in range(span):
         iso = (start + timedelta(days=i)).isoformat()
         days[iso] = "busy" if iso in busy else ("free" if readable else "unknown")
-    return jsonify({"enabled": True, "linked": True, "days": days})
+    return jsonify({**config, "enabled": True, "linked": True, "days": days})
 
 
 # ── Wheel seeding (travel wheels only) ───────────────────────────────
@@ -1142,6 +1196,38 @@ def admin_users():
         db = load_db()
         require_admin(db)
         return jsonify(admin_user_list(db))
+
+
+@app.get("/api/admin/settings")
+def admin_get_settings():
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        return jsonify(settings_view(db))
+
+
+@app.put("/api/admin/settings")
+def admin_put_settings():
+    """Tune the two poll knobs — when an evening starts, and how far ahead
+    a poll may reach. Values are clamped to their bounds; the calendar
+    cache is cleared so busy hints recompute against the new window."""
+    payload = request.get_json(force=True, silent=True) or {}
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        stored = db.setdefault("settings", {})
+        if "evening_from" in payload:
+            stored["evening_from"] = clamp_evening_from(
+                payload.get("evening_from"), DEFAULT_EVENING_FROM)
+        if "poll_horizon_days" in payload:
+            stored["poll_horizon_days"] = clamp_horizon(
+                payload.get("poll_horizon_days"), DEFAULT_POLL_HORIZON_DAYS)
+        save_db(db)
+        apply_runtime_settings(db)
+        view = settings_view(db)
+    with _cal_lock:  # busy-sets were digested against the old evening/horizon
+        _cal_cache.clear()
+    return jsonify(view)
 
 
 @app.put("/api/admin/users/<user_id>")

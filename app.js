@@ -1000,7 +1000,11 @@
   const pollScrapBtn = document.getElementById('poll-scrap-btn');
   const pollError = document.getElementById('poll-error');
 
-  const POLL_HORIZON_DAYS = 60;  // how far ahead a poll can reach — must match the server
+  // Both refreshed from the server (admin-configurable) whenever a poll's
+  // availability loads — see loadPollAvailability. The defaults only stand
+  // in for the moment before that first fetch returns.
+  let pollHorizonDays = 60;  // how far ahead a poll can reach
+  let pollEveningFrom = 17;  // local hour an evening counts as busy
 
   let pollEntryId = null;
   let pollSelected = new Set();  // candidate dates while proposing
@@ -1116,16 +1120,27 @@
     pollCalEnabled = false;
     try {
       const today = new Date(); today.setHours(0, 0, 0, 0);
-      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=${POLL_HORIZON_DAYS}`);
+      // ask for the widest window we support; the server clamps to its own
+      // horizon and tells us what that (admin-set) horizon actually is
+      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=366`);
       pollCalEnabled = !!(av && av.enabled);
       pollLinked = !!(av && av.linked);
+      if (av && Number.isFinite(av.horizon_days)) pollHorizonDays = av.horizon_days;
+      if (av && Number.isFinite(av.evening_from)) pollEveningFrom = av.evening_from;
       if (pollLinked && av.days) pollAvail = av.days;
     } catch { /* availability is a hint, never a blocker */ }
   }
 
+  // 17 → "5pm", 0 → "midnight", 12 → "noon" — a friendly evening-start label
+  function fmtHour(h) {
+    if (h === 0) return 'midnight';
+    if (h === 12) return 'noon';
+    return `${((h + 11) % 12) + 1}${h < 12 ? 'am' : 'pm'}`;
+  }
+
   function setPollLegend(el) {
     if (pollLinked) {
-      el.innerHTML = '<span class="cal-dot busy"></span>busy that evening'
+      el.innerHTML = `<span class="cal-dot busy"></span>busy that evening (from ${fmtHour(pollEveningFrom)})`
         + '<span class="cal-dot free"></span>free — <em>from your calendar; all still tappable</em>';
     } else if (pollCalEnabled) {
       el.textContent = '📆 Link your calendar (top bar) and your busy evenings mark themselves.';
@@ -1155,7 +1170,7 @@
     dateGrid.innerHTML = '';
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const todayIso = isoLocal(today);
-    const horizon = new Date(today); horizon.setDate(today.getDate() + POLL_HORIZON_DAYS);
+    const horizon = new Date(today); horizon.setDate(today.getDate() + pollHorizonDays);
     const horizonIso = isoLocal(horizon);
     if (!pollViewMonth) pollViewMonth = monthStart(today);
 
@@ -1471,6 +1486,7 @@
     adminUserList.innerHTML = '';
     adminModal.showModal();
     loadVersion(); // another admin may have updated in the meantime
+    loadAdminSettings(); // another admin may have retuned the polls
     try {
       renderAdminUsers(await rootApi('/admin/users'));
     } catch (err) {
@@ -1478,6 +1494,53 @@
     }
   });
   closeAdminBtn.addEventListener('click', () => adminModal.close());
+
+  // ── Poll settings (evening hour & horizon) ────────────────────────
+  const settingEveningFrom = document.getElementById('setting-evening-from');
+  const settingHorizon = document.getElementById('setting-horizon');
+  const settingsSaveBtn = document.getElementById('settings-save-btn');
+  const settingsStatus = document.getElementById('settings-status');
+
+  function fillSettings(s) {
+    settingEveningFrom.value = s.evening_from;
+    settingHorizon.value = s.poll_horizon_days;
+    const [eMin, eMax] = s.bounds.evening_from;
+    const [hMin, hMax] = s.bounds.poll_horizon_days;
+    settingEveningFrom.min = eMin; settingEveningFrom.max = eMax;
+    settingHorizon.min = hMin; settingHorizon.max = hMax;
+    // keep the propose grid in step with what's saved
+    pollHorizonDays = s.poll_horizon_days;
+    pollEveningFrom = s.evening_from;
+  }
+
+  async function loadAdminSettings() {
+    settingsStatus.textContent = '';
+    try {
+      fillSettings(await rootApi('/admin/settings'));
+    } catch (err) {
+      settingsStatus.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  settingsSaveBtn.addEventListener('click', async () => {
+    settingsStatus.textContent = '⏳ Saving…';
+    settingsSaveBtn.disabled = true;
+    try {
+      const s = await rootApi('/admin/settings', {
+        method: 'PUT',
+        body: JSON.stringify({
+          evening_from: Number(settingEveningFrom.value),
+          poll_horizon_days: Number(settingHorizon.value),
+        }),
+      });
+      fillSettings(s);
+      settingsStatus.textContent = '✅ Saved — polls use these straight away.';
+    } catch (err) {
+      settingsStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      settingsSaveBtn.disabled = false;
+    }
+  });
 
   // ── Backup & restore ──────────────────────────────────────────────
   const adminBackupBtn = document.getElementById('admin-backup-btn');

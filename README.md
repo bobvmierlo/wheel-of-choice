@@ -307,10 +307,21 @@ Busy evenings are judged in local time (17:00–midnight by default). If
 your server isn't on Amsterdam time, set your zone — uncomment `WHEEL_TZ`
 in [`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service) (any
 [IANA name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
-like `Europe/London` or `America/New_York`), then restart. To move where
-the evening starts — an early-bird crowd, or a later-dinner one — set
-`WHEEL_EVENING_FROM` to the local hour (0–23, default `17`); every event
-from that hour to midnight then counts as a busy evening.
+like `Europe/London` or `America/New_York`), then restart.
+
+**Two poll knobs are tunable live**, no restart or env editing needed —
+open **🛠️ Admin → Date polls** (admins only):
+
+- **when an evening starts** (0–23, default 17) — the hour from which a
+  calendar event counts as a busy evening, for an early-bird or a
+  later-dinner crowd;
+- **how far ahead a poll reaches** (7–365 days, default 60) — how far
+  into the future you can put candidate evenings up.
+
+Changes are saved to the server's `db.json` and take effect immediately
+for new and in-progress polls. The `WHEEL_EVENING_FROM` and
+`WHEEL_POLL_HORIZON_DAYS` env vars only set the starting defaults an admin
+can then override.
 
 **Where each provider hides the secret address:**
 
@@ -341,8 +352,8 @@ each member does this on their own account.
   to your own timezone and restart.
 - *All-day events don't mark me busy* — on purpose: birthday and
   public-holiday calendars would otherwise paint whole weeks red. Only
-  timed evening events (from `WHEEL_EVENING_FROM`, 17:00 by default,
-  onward) count.
+  timed evening events (from the evening-start hour, 17:00 by default —
+  see **🛠️ Admin → Date polls**) count.
 
 ## Seed data & sources
 
