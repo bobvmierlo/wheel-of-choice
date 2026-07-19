@@ -10,8 +10,8 @@ your list, nothing else. Personal filter preferences are stored per
 user per wheel, so partners sharing a wheel each keep their own filters.
 
 There are three kinds of wheel:
-  - "holidays"    : whole-country holiday destinations (seeded from the
-                    catalogue via onboarding questions)
+  - "holidays"    : holiday destinations — countries and larger regions
+                    (seeded from the catalogue via onboarding questions)
   - "citytrips"   : city trips in and around Europe (seeded the same way)
   - "restaurants" : a fully custom list — no seeding, you add every
                     entry yourself, and there are no vetoes: what the
