@@ -328,6 +328,14 @@ body {
 }
 .link-editor .btn { align-self: flex-start; }
 
+.catalog-sync {
+  border-top: 1px solid var(--panel-border);
+  padding-top: 1rem;
+  margin-bottom: 1.3rem;
+}
+.catalog-sync .manage-hint { margin-bottom: 0; }
+#sync-catalog-status { font-weight: 600; color: var(--text); }
+
 .dest-list { list-style: none; display: flex; flex-direction: column; gap: 0.35rem; }
 .dest-list li {
   display: flex;

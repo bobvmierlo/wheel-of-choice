@@ -1075,6 +1075,70 @@ def availability():
 
 
 # ── Wheel seeding (travel wheels only) ───────────────────────────────
+def catalog_distance(entry, home):
+    """A catalogue entry's distance relative to a home region: long-haul
+    stays put, an entry that is 'near' the home is regional, the rest is
+    Europe."""
+    if entry["distance"] == "longhaul":
+        return "longhaul"
+    if home in entry.get("near", []):
+        return "regional"
+    return "europe"
+
+
+def build_catalog_destination(entry, distance, allowed):
+    """One wheel destination built from a catalogue entry — shared by
+    first-time seeding and the later 'add new catalogue places' sync so
+    both land identical rows (regional gems on, niche picks discoverable
+    but off)."""
+    return {
+        "id": entry["id"],
+        "name": entry["name"],
+        "flag": entry["flag"],
+        "budget": entry["budget"],
+        "distance": distance,
+        "vibes": entry["vibes"],
+        "seasons": entry["seasons"],
+        "party": entry["party"],
+        "favorite": False,
+        "starred_by": [],
+        "enabled": distance in allowed
+        and (entry.get("enabled", True) or distance == "regional"),
+        "notes": entry.get("notes", ""),
+        "links": entry.get("links") or default_links(entry["name"]),
+    }
+
+
+def wheel_home_roam(wheel):
+    """Best guess of the onboarding home region and roam range for a
+    travel wheel, so a catalogue sync can promote regional gems the same
+    way creation did. Wheels created since this feature store the answers
+    outright; older ones are reverse-engineered from the destinations
+    already on the wheel — distance is a clean signal (favourites force a
+    place *on* but never change its distance)."""
+    if wheel.get("home") in HOME_REGIONS and wheel.get("roam") in ROAM_DISTANCES:
+        return wheel["home"], wheel["roam"]
+    index = {e["id"]: e for e in catalog(wheel["type"])}
+    seeded = [(d, index[d["id"]]) for d in wheel["destinations"] if d["id"] in index]
+    # home: the region whose recomputed distances best fit what's stored
+    home, best = None, 0
+    for candidate in HOME_REGIONS:
+        score = sum(1 for d, e in seeded
+                    if d.get("distance") == catalog_distance(e, candidate))
+        if score > best:
+            home, best = candidate, score
+    # roam: the widest band that is live on the wheel, favourites aside
+    live = {d.get("distance") for d, _ in seeded
+            if d.get("enabled") and not d.get("starred_by") and not d.get("favorite")}
+    if "longhaul" in live:
+        roam = "anywhere"
+    elif "europe" in live:
+        roam = "europe"
+    else:
+        roam = "close"
+    return home, roam
+
+
 def seed_destinations(wheel_type, home, roam, vibes, budget, favorites, user_id):
     """Build one travel wheel from its catalogue, tailored to the answers.
 
@@ -1095,28 +1159,8 @@ def seed_destinations(wheel_type, home, roam, vibes, budget, favorites, user_id)
     allowed = ROAM_DISTANCES[roam]
     destinations = []
     for entry in catalog(wheel_type):
-        if entry["distance"] == "longhaul":
-            distance = "longhaul"
-        elif home in entry.get("near", []):
-            distance = "regional"
-        else:
-            distance = "europe"
-        destinations.append({
-            "id": entry["id"],
-            "name": entry["name"],
-            "flag": entry["flag"],
-            "budget": entry["budget"],
-            "distance": distance,
-            "vibes": entry["vibes"],
-            "seasons": entry["seasons"],
-            "party": entry["party"],
-            "favorite": False,
-            "starred_by": [],
-            "enabled": distance in allowed
-            and (entry.get("enabled", True) or distance == "regional"),
-            "notes": entry.get("notes", ""),
-            "links": entry.get("links") or default_links(entry["name"]),
-        })
+        distance = catalog_distance(entry, home)
+        destinations.append(build_catalog_destination(entry, distance, allowed))
     if vibes:
         scored = []
         for dest in destinations:
@@ -1186,6 +1230,10 @@ def create_wheel():
         user = current_user(db)
         wheel = new_wheel(wheel_type, name)
         if travel:
+            # keep the answers that shape seeding, so a later catalogue
+            # sync can promote regional gems exactly as creation did
+            wheel["home"] = home
+            wheel["roam"] = roam
             wheel["destinations"] = seed_destinations(
                 wheel_type, home, roam, vibes, budget, favorites, user["id"]
             )
@@ -1776,6 +1824,43 @@ def create_destination(wheel_id):
             tag=f"{wheel['id']}-add",  # don't overwrite a spin waiting for a thumbs-up
         )
     return jsonify(dest), 201
+
+
+@app.post("/api/wheels/<wheel_id>/destinations/sync")
+def sync_catalog(wheel_id):
+    """Top the wheel up with catalogue places it doesn't have yet — the
+    ones added to the seed since this wheel was created. New rows follow
+    the same rules as first-time seeding: island/regional gems land *on*
+    for this wheel's home, niche picks come in discoverable but off, and
+    everything already on the wheel (including hand-added entries and
+    edits) is left untouched."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel = get_wheel(db, user, wheel_id)
+        if not is_travel(wheel):
+            abort(400, description="only travel wheels are seeded from a catalogue")
+        home, roam = wheel_home_roam(wheel)
+        allowed = ROAM_DISTANCES[roam]
+        have = {d["id"] for d in wheel["destinations"]}
+        added = []
+        for entry in catalog(wheel["type"]):
+            if entry["id"] in have:
+                continue
+            distance = catalog_distance(entry, home)
+            added.append(build_catalog_destination(entry, distance, allowed))
+        if added:
+            wheel["destinations"].extend(added)
+            save_db(db)
+            on = sum(1 for d in added if d["enabled"])
+            push_to_users(
+                [u for u in wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
+                f"🌍 {user['name']} added {len(added)} new place(s) to {wheel['name']}",
+                f"Fresh from the catalogue{f' — {on} already on the wheel' if on else ''} ⭐",
+                wheel,
+                tag=f"{wheel['id']}-add",
+            )
+    return jsonify({"added": len(added), "destinations": wheel["destinations"]})
 
 
 @app.put("/api/wheels/<wheel_id>/destinations/<dest_id>")

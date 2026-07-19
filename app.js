@@ -291,6 +291,8 @@
   const manageBtn = document.getElementById('manage-btn');
   const closeManageBtn = document.getElementById('close-manage-btn');
   const destList = document.getElementById('dest-list');
+  const syncCatalogBtn = document.getElementById('sync-catalog-btn');
+  const syncCatalogStatus = document.getElementById('sync-catalog-status');
   const addForm = document.getElementById('add-form');
   const formTitle = document.getElementById('form-title');
   const formSubmit = document.getElementById('form-submit');
@@ -2379,6 +2381,25 @@
   manageModal.addEventListener('close', () => {
     exitEditMode();
     refresh();
+  });
+
+  syncCatalogBtn.addEventListener('click', async () => {
+    syncCatalogBtn.disabled = true;
+    syncCatalogStatus.hidden = false;
+    syncCatalogStatus.textContent = 'Checking the catalogue…';
+    try {
+      const res = await api('/destinations/sync', { method: 'POST' });
+      state.destinations = res.destinations;
+      renderDestList();
+      syncCatalogStatus.textContent = res.added
+        ? `✅ Added ${res.added} new ${res.added === 1 ? 'place' : 'places'} — scroll down to find them.`
+        : '👍 You’re already up to date — nothing new in the catalogue.';
+    } catch (err) {
+      console.error(err);
+      syncCatalogStatus.textContent = '⚠️ Could not reach the server — try again in a moment.';
+    } finally {
+      syncCatalogBtn.disabled = false;
+    }
   });
 
   async function patchDestination(id, changes) {
