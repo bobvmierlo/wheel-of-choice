@@ -29,6 +29,11 @@ Environment=WHEEL_DATA_DIR=/var/lib/wheel-of-choice
 # flag delivery problems with your server's pushes.
 #Environment=VAPID_SUBJECT=mailto:you@example.com
 
+# Date polls read calendars (optional — needs icalendar and
+# recurring-ical-events, see the README) in this timezone. Busy evenings
+# are worked out in local time, so set your own if it isn't Amsterdam.
+#Environment=WHEEL_TZ=Europe/Amsterdam
+
 # Run as an unprivileged throwaway user with a read-only view of the system
 DynamicUser=yes
 ProtectSystem=strict

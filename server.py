@@ -49,10 +49,13 @@ import os
 import secrets
 import subprocess
 import threading
+import time
+import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote
+from urllib.parse import quote, urlparse
+from zoneinfo import ZoneInfo
 
 from flask import Flask, abort, jsonify, request, send_from_directory
 from werkzeug.exceptions import HTTPException
@@ -62,6 +65,13 @@ try:  # push notifications are optional — everything else works without
 except ImportError:
     webpush = None
     WebPushException = Exception
+
+try:  # calendar availability is optional — date polls work fully without
+    from icalendar import Calendar as ICalendar
+    import recurring_ical_events
+except ImportError:
+    ICalendar = None
+    recurring_ical_events = None
 
 ROOT = Path(__file__).parent.resolve()
 # HOLIDAY_DATA_DIR is the pre-rename name — still honoured so a git pull
@@ -108,6 +118,21 @@ HISTORY_LIMIT = 50
 MAX_SEED_FAVORITES = 8  # per wheel, when onboarding picks favourites
 HISTORY_STATUSES = {"booked", "visited"}  # a pick's life after the spin
 SESSION_TTL_DAYS = 90  # log-ins older than this expire
+
+# Date polls (restaurant wheels): once a pick lands, members coordinate an
+# evening. A poll lives on the history entry, so it syncs, dies and clears
+# with the entry. The evening window is what "busy" means for a dinner.
+POLL_MAX_DATES = 10  # candidate dates a proposer may put up
+POLL_HORIZON_DAYS = 60  # how far ahead a poll (and calendar lookahead) reaches
+LOCAL_TZ = ZoneInfo(os.environ.get("WHEEL_TZ", "Europe/Amsterdam"))
+EVENING_FROM = 17  # local hour a dinner evening starts (17:00–23:59 counts as busy)
+
+# Personal calendar feeds (secret ICS URLs) power the poll's busy/free hints.
+# Read-only, per user, never shown to anyone else — see the README.
+MAX_ICS_FEEDS = 4  # feeds per account
+ICS_TTL = 20 * 60  # seconds a fetched calendar's busy-set is cached
+ICS_TIMEOUT = 8  # seconds to wait on a feed before giving up
+ICS_MAX_BYTES = 2_000_000  # refuse calendars larger than this
 
 app = Flask(__name__)
 _lock = threading.Lock()
@@ -664,6 +689,235 @@ def push_resubscribe():
             store_subscription(db, owner, sub)
             save_db(db)
     return "", 204
+
+
+# ── Calendar availability (secret ICS feeds) ─────────────────────────
+# A personal aid for date polls: each member may link their own calendar
+# by its secret iCal URL (Google/Outlook/iCloud/Nextcloud all offer one).
+# We fetch it read-only and work out which *evenings* are busy — shown
+# only to that member, never to the rest of the wheel. Feed URLs are
+# secrets: stored per user, never returned in full by any endpoint.
+#
+# The cache holds each feed's *digested* busy-date set (not raw events),
+# keyed by URL, guarded by its own lock that is NEVER nested inside the
+# db lock — network fetches happen with no lock held, like push delivery.
+_cal_lock = threading.Lock()
+_cal_cache = {}  # url -> {"at": epoch, "busy": set[str] | None}
+
+
+def to_local(dt):
+    """A VEVENT datetime in LOCAL_TZ. Floating (naive) times are read as
+    already-local — the pragmatic choice for a home calendar."""
+    if dt.tzinfo is None:
+        return dt.replace(tzinfo=LOCAL_TZ)
+    return dt.astimezone(LOCAL_TZ)
+
+
+def evening_dates(start_dt, end_dt):
+    """Local dates whose EVENING_FROM–midnight window the event [start,
+    end) overlaps. Bounded to the poll horizon so a stray multi-day timed
+    event can't blow up the loop."""
+    days = set()
+    if end_dt <= start_dt:
+        end_dt = start_dt + timedelta(minutes=1)  # zero-length event → its start evening
+    day = start_dt.date()
+    last = min((end_dt - timedelta(seconds=1)).date(),
+               day + timedelta(days=POLL_HORIZON_DAYS + 1))
+    while day <= last:
+        window_start = datetime.combine(day, datetime.min.time(),
+                                        tzinfo=LOCAL_TZ).replace(hour=EVENING_FROM)
+        window_end = datetime.combine(day, datetime.max.time(), tzinfo=LOCAL_TZ)
+        if start_dt < window_end and end_dt > window_start:
+            days.add(day.isoformat())
+        day += timedelta(days=1)
+    return days
+
+
+def compute_busy(raw):
+    """Busy evening dates (ISO strings) from raw ICS bytes, over today →
+    horizon. All-day events are skipped on purpose — birthday and
+    public-holiday calendars would otherwise mark whole weeks busy — as
+    are CANCELLED and free/TRANSPARENT events."""
+    cal = ICalendar.from_ical(raw)
+    today = datetime.now(LOCAL_TZ).date()
+    start = datetime.combine(today, datetime.min.time(), tzinfo=LOCAL_TZ)
+    end = start + timedelta(days=POLL_HORIZON_DAYS + 1)
+    busy = set()
+    for event in recurring_ical_events.of(cal).between(start, end):
+        if str(event.get("STATUS", "")).upper() == "CANCELLED":
+            continue
+        if str(event.get("TRANSP", "")).upper() == "TRANSPARENT":
+            continue
+        dtstart = event.get("DTSTART")
+        if dtstart is None:
+            continue
+        begin = dtstart.dt
+        if not isinstance(begin, datetime):
+            continue  # date-typed DTSTART = all-day → skip
+        dtend = event.get("DTEND")
+        finish = dtend.dt if dtend is not None and isinstance(dtend.dt, datetime) else begin
+        busy |= evening_dates(to_local(begin), to_local(finish))
+    return busy
+
+
+def cached_busy(url):
+    """This feed's busy-date set, fetched-and-cached. Returns None only
+    when the feed has never yielded readable data; a fetch failure with a
+    prior good result keeps serving the stale set (better than blank for
+    a home dinner poll)."""
+    now = time.time()
+    with _cal_lock:
+        entry = _cal_cache.get(url)
+        if entry and now - entry["at"] < ICS_TTL:
+            return entry["busy"]
+    busy = None
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "wheel-of-choice"})
+        with urllib.request.urlopen(req, timeout=ICS_TIMEOUT) as resp:  # noqa: S310 (scheme vetted)
+            raw = resp.read(ICS_MAX_BYTES + 1)
+        if len(raw) > ICS_MAX_BYTES:
+            raise ValueError("calendar too large")
+        busy = compute_busy(raw)
+    except Exception as err:
+        app.logger.info("calendar fetch failed for %s…: %s", urlparse(url).hostname, err)
+    with _cal_lock:
+        prev = _cal_cache.get(url)
+        if busy is None and prev and prev.get("busy") is not None:
+            busy = prev["busy"]  # stale beats blank
+        _cal_cache[url] = {"at": now, "busy": busy}
+    return busy
+
+
+def busy_evenings_for(feeds):
+    """(busy date-set, readable?) across a user's feeds. `readable` is
+    False only when not one feed yielded data — callers then show
+    'unknown' rather than a confident 'free'."""
+    busy = set()
+    readable = False
+    for feed in feeds:
+        result = cached_busy(feed["url"])
+        if result is not None:
+            busy |= result
+            readable = True
+    return busy, readable
+
+
+def clean_feed_url(url):
+    """Normalize + vet a pasted calendar URL. webcal→https; only https
+    (plus http on localhost, so the feature is testable) is allowed. We
+    keep SSRF defences proportionate for a single-household home server:
+    scheme allow-list, size cap, timeout — no DNS-rebinding theatre."""
+    url = url.strip()
+    if url.lower().startswith("webcal://"):
+        url = "https://" + url[len("webcal://"):]
+    if not 0 < len(url) <= 500:
+        abort(400, description="paste your calendar's secret iCal address")
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").lower()
+    if parsed.scheme == "https" or (parsed.scheme == "http" and host in ("localhost", "127.0.0.1")):
+        return url
+    abort(400, description="that needs to be an https:// (or webcal://) calendar address")
+
+
+def feed_summary(feed):
+    """Safe-to-share view of a feed — never the secret URL itself."""
+    return {"id": feed["id"], "label": feed["label"], "host": urlparse(feed["url"]).hostname or ""}
+
+
+@app.get("/api/me/calendars")
+def list_calendars():
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        feeds = [feed_summary(f) for f in user.get("ics_feeds", [])]
+    return jsonify({"enabled": ICalendar is not None, "feeds": feeds})
+
+
+@app.post("/api/me/calendars")
+def add_calendar():
+    if ICalendar is None:
+        abort(503, description="this server can't read calendars yet — install icalendar "
+                               "and recurring-ical-events and restart (see the README)")
+    payload = request.get_json(force=True, silent=True) or {}
+    url = clean_feed_url(str(payload.get("url", "")))
+    label = str(payload.get("label", "")).strip()[:40] or urlparse(url).hostname or "Calendar"
+    # test-fetch outside the db lock — proves the URL works and warms the
+    # cache, and network I/O must never block other requests on _lock
+    try:
+        busy = cached_busy_fresh(url)
+    except Exception as err:
+        abort(400, description=f"couldn't read that calendar — {err}")
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        feeds = user.setdefault("ics_feeds", [])
+        if any(f["url"] == url for f in feeds):
+            abort(409, description="you've already linked that calendar")
+        if len(feeds) >= MAX_ICS_FEEDS:
+            abort(400, description=f"{MAX_ICS_FEEDS} calendars is the limit — remove one first")
+        feed = {"id": "c-" + uuid.uuid4().hex[:8], "label": label, "url": url}
+        feeds.append(feed)
+        save_db(db)
+    return jsonify({"feed": feed_summary(feed), "busy_days": len(busy)})
+
+
+def cached_busy_fresh(url):
+    """Fetch + parse now (bypassing the TTL), storing the result. Raises
+    on failure so the add-calendar route can report why."""
+    req = urllib.request.Request(url, headers={"User-Agent": "wheel-of-choice"})
+    with urllib.request.urlopen(req, timeout=ICS_TIMEOUT) as resp:  # noqa: S310 (scheme vetted)
+        raw = resp.read(ICS_MAX_BYTES + 1)
+    if len(raw) > ICS_MAX_BYTES:
+        raise ValueError("that calendar is too big")
+    busy = compute_busy(raw)
+    with _cal_lock:
+        _cal_cache[url] = {"at": time.time(), "busy": busy}
+    return busy
+
+
+@app.delete("/api/me/calendars/<feed_id>")
+def remove_calendar(feed_id):
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        feeds = user.get("ics_feeds", [])
+        removed = next((f for f in feeds if f["id"] == feed_id), None)
+        if removed:
+            user["ics_feeds"] = [f for f in feeds if f["id"] != feed_id]
+            save_db(db)
+    if removed:
+        with _cal_lock:
+            _cal_cache.pop(removed["url"], None)
+    return "", 204
+
+
+@app.get("/api/me/availability")
+def availability():
+    """Busy/free per date for the requesting user's own calendars, over a
+    window. Only ever the caller's own feeds — a poll's other members see
+    nothing but the ticks people choose to place."""
+    if ICalendar is None:
+        return jsonify({"enabled": False, "linked": False, "days": {}})
+    try:
+        start = datetime.strptime(request.args.get("from", ""), "%Y-%m-%d").date()
+    except ValueError:
+        start = datetime.now(LOCAL_TZ).date()
+    try:
+        span = max(1, min(POLL_HORIZON_DAYS, int(request.args.get("days", 28))))
+    except (TypeError, ValueError):
+        span = 28
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        feeds = [dict(f) for f in user.get("ics_feeds", [])]  # copy, then drop the lock
+    if not feeds:
+        return jsonify({"enabled": True, "linked": False, "days": {}})
+    busy, readable = busy_evenings_for(feeds)  # network I/O, no _lock held
+    days = {}
+    for i in range(span):
+        iso = (start + timedelta(days=i)).isoformat()
+        days[iso] = "busy" if iso in busy else ("free" if readable else "unknown")
+    return jsonify({"enabled": True, "linked": True, "days": days})
 
 
 # ── Wheel seeding (travel wheels only) ───────────────────────────────
@@ -1234,7 +1488,7 @@ def propose_pick(wheel_id):
         )
         return jsonify({
             "final": True,
-            "history": wheel["history"],
+            "history": history_view(db, wheel, user),
             "round": round_payload(db, user, wheel),
         })
 
@@ -1280,7 +1534,7 @@ def confirm_pick(wheel_id):
         )
         return jsonify({
             "final": True,
-            "history": wheel["history"],
+            "history": history_view(db, wheel, user),
             "round": round_payload(db, user, wheel),
         })
 
@@ -1365,7 +1619,8 @@ def delete_destination(wheel_id, dest_id):
 def list_history(wheel_id):
     with _lock:
         db = load_db()
-        return jsonify(get_wheel(db, current_user(db), wheel_id)["history"])
+        user = current_user(db)
+        return jsonify(history_view(db, get_wheel(db, user, wheel_id), user))
 
 
 @app.put("/api/wheels/<wheel_id>/history/<entry_id>")
@@ -1403,7 +1658,7 @@ def update_history(wheel_id, entry_id):
             if destination is not None and destination["enabled"]:
                 destination["enabled"] = False
         save_db(db)
-        return jsonify({"history": wheel["history"], "destination": destination})
+        return jsonify({"history": history_view(db, wheel, user), "destination": destination})
 
 
 @app.delete("/api/wheels/<wheel_id>/history")
@@ -1415,6 +1670,225 @@ def clear_history(wheel_id):
         wheel["round"] = empty_round()  # clean slate all round
         save_db(db)
     return "", 204
+
+
+# ── Date polls (restaurant wheels) ───────────────────────────────────
+# After a restaurant pick lands in the history, any member can open a
+# Doodle-style poll on it: the proposer puts up a handful of evenings,
+# everyone ticks what works, and a date everyone ticked can be locked
+# in. The poll lives *on* the history entry, so it rides the existing
+# 5-second history poll, dies when the entry is deleted, and clears with
+# the history — no separate lifecycle to keep in sync.
+def pretty_date(iso):
+    """'2026-07-24' → 'Friday 24 Jul' (falls back to the raw string)."""
+    try:
+        return datetime.strptime(iso, "%Y-%m-%d").strftime("%A %-d %b")
+    except (ValueError, TypeError):
+        return str(iso)
+
+
+def clean_poll_dates(values):
+    """Validate a proposer's candidate dates: ISO YYYY-MM-DD, no past,
+    within the horizon, deduped and sorted, 2–POLL_MAX_DATES of them."""
+    if not isinstance(values, list):
+        abort(400, description="pick a few evenings first")
+    today = datetime.now(LOCAL_TZ).date()
+    horizon = today + timedelta(days=POLL_HORIZON_DAYS)
+    dates = set()
+    for value in values:
+        try:
+            day = datetime.strptime(str(value), "%Y-%m-%d").date()
+        except ValueError:
+            abort(400, description="that's not a date I understand")
+        if day < today:
+            abort(400, description="those evenings are in the past — pick dates still to come")
+        if day > horizon:
+            abort(400, description=f"keep it within the next {POLL_HORIZON_DAYS} days")
+        dates.add(day.isoformat())
+    dates = sorted(dates)
+    if len(dates) < 2:
+        abort(400, description="put up at least two evenings to choose between")
+    if len(dates) > POLL_MAX_DATES:
+        abort(400, description=f"that's a lot of evenings — {POLL_MAX_DATES} at most")
+    return dates
+
+
+def restaurant_poll_entry(db, user, wheel_id, entry_id):
+    """The (wheel, history entry) a poll route targets. Polls are a
+    restaurant thing; travel picks track a trip date via trip status."""
+    wheel = get_wheel(db, user, wheel_id)
+    if is_travel(wheel):
+        abort(400, description="date polls are a restaurant thing — travel picks use trip status")
+    entry = next((e for e in wheel["history"] if e.get("id") == entry_id), None)
+    if entry is None:
+        abort(404, description="that pick is no longer in the history")
+    return wheel, entry
+
+
+def poll_unanimous(members, poll):
+    """Dates every *current* member ticked — recomputed live so members
+    joining or leaving mid-poll self-heal (a newcomer must vote before
+    anything is unanimous; a leaver's votes simply stop counting)."""
+    votes = poll.get("votes", {})
+    return [d for d in poll["dates"]
+            if members and all(d in votes.get(u["id"], ()) for u in members)]
+
+
+def poll_view(db, wheel, entry, user):
+    """One member's view of a poll: their own vote, everyone's ticks by
+    name, which dates are unanimous, and who's still to vote. Names are
+    resolved here (never stored in votes), so renames and departures need
+    no rewrite of stored data."""
+    poll = entry.get("poll")
+    if not poll:
+        return None
+    members = wheel_member_users(db, wheel["id"])
+    names = {u["id"]: u["name"] for u in members}
+    votes = poll.get("votes", {})
+    return {
+        "id": poll["id"],
+        "status": poll["status"],
+        "dates": poll["dates"],
+        "by_name": db["users"].get(poll["by"], {}).get("name", "someone"),
+        "locked_date": poll.get("locked_date"),
+        "locked_by_name": (db["users"].get(poll["locked_by"], {}).get("name")
+                           if poll.get("locked_by") else None),
+        "my_dates": votes.get(user["id"]),  # None → this member hasn't voted yet
+        "votes": sorted(
+            ({"name": names[uid], "dates": ds, "mine": uid == user["id"]}
+             for uid, ds in votes.items() if uid in names),
+            key=lambda v: v["name"].lower(),
+        ),
+        "unanimous": poll_unanimous(members, poll),
+        "waiting_names": sorted(names[u["id"]] for u in members if u["id"] not in votes),
+        "members": len(members),
+    }
+
+
+def history_view(db, wheel, user):
+    """History with each entry's poll serialized for this viewer. Every
+    endpoint that hands back history routes through here, so the client
+    always sees one shape."""
+    return [
+        {**entry, "poll": poll_view(db, wheel, entry, user)} if entry.get("poll") else entry
+        for entry in wheel["history"]
+    ]
+
+
+@app.post("/api/wheels/<wheel_id>/history/<entry_id>/poll")
+def start_poll(wheel_id, entry_id):
+    dates = clean_poll_dates((request.get_json(force=True, silent=True) or {}).get("dates"))
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel, entry = restaurant_poll_entry(db, user, wheel_id, entry_id)
+        if entry.get("poll"):
+            abort(409, description="there's already a date poll on this pick — "
+                                   "vote there, or scrap it first")
+        entry["poll"] = {
+            "id": "p-" + uuid.uuid4().hex[:8],
+            "status": "open",
+            "by": user["id"],
+            "created": datetime.now(timezone.utc).isoformat(),
+            "dates": dates,
+            # the proposer ticks all their own dates — they'd hardly put up
+            # evenings they can't do; they can untick afterwards
+            "votes": {user["id"]: list(dates)},
+            "locked_date": None,
+            "locked_by": None,
+        }
+        save_db(db)
+        label = " ".join(p for p in (entry.get("flag", ""), entry["name"]) if p)
+        push_to_users(
+            [u for u in wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
+            f"📅 {user['name']} started a date poll for {label}",
+            f"{wheel['name']}: tick the evenings you can make!",
+            wheel,
+            tag=f"{wheel['id']}-poll-{entry_id}",
+        )
+        return jsonify({"history": history_view(db, wheel, user)})
+
+
+@app.put("/api/wheels/<wheel_id>/history/<entry_id>/poll/votes")
+def vote_poll(wheel_id, entry_id):
+    picked = (request.get_json(force=True, silent=True) or {}).get("dates")
+    if not isinstance(picked, list):
+        abort(400, description="send the evenings you can make")
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel, entry = restaurant_poll_entry(db, user, wheel_id, entry_id)
+        poll = entry.get("poll")
+        if not poll:
+            abort(404, description="that date poll is gone")
+        if poll["status"] == "locked":
+            abort(409, description="the date's already locked in")
+        had_voted = user["id"] in poll["votes"]  # a re-vote must not re-ping
+        picked = set(map(str, picked))
+        poll["votes"][user["id"]] = [d for d in poll["dates"] if d in picked]
+        members = wheel_member_users(db, wheel["id"])
+        member_ids = {u["id"] for u in members}
+        save_db(db)
+        # ping the proposer only when the *last* remaining member first votes
+        if not had_voted and member_ids <= set(poll["votes"]):
+            spinner = db["users"].get(poll["by"])
+            if spinner and spinner["id"] != user["id"]:
+                unanimous = poll_unanimous(members, poll)
+                body = (f"{pretty_date(unanimous[0])} works for all of you — lock it in! 🔒"
+                        if unanimous else
+                        "…but no evening works for everyone yet. Add more dates?")
+                push_to_users([spinner], f"🗳️ Everyone's voted on {entry['name']}",
+                              body, wheel, tag=f"{wheel['id']}-poll-{entry_id}")
+        return jsonify({"history": history_view(db, wheel, user)})
+
+
+@app.post("/api/wheels/<wheel_id>/history/<entry_id>/poll/lock")
+def lock_poll(wheel_id, entry_id):
+    date_str = str((request.get_json(force=True, silent=True) or {}).get("date", ""))
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel, entry = restaurant_poll_entry(db, user, wheel_id, entry_id)
+        poll = entry.get("poll")
+        if not poll:
+            abort(404, description="that date poll is gone")
+        if poll["status"] == "locked":
+            abort(409, description=f"too late — {pretty_date(poll['locked_date'])} "
+                                   "is already locked in")
+        if date_str not in poll["dates"]:
+            abort(400, description="that date isn't one of the options")
+        # revalidate against current members: a fresh join or changed vote
+        # since the button rendered must not be steamrolled
+        members = wheel_member_users(db, wheel["id"])
+        if date_str not in poll_unanimous(members, poll):
+            abort(409, description="not everyone's free that evening (yet)")
+        poll["status"] = "locked"
+        poll["locked_date"] = date_str
+        poll["locked_by"] = user["id"]
+        entry["trip_date"] = date_str  # reuse the existing field
+        save_db(db)
+        push_to_users(
+            [u for u in wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
+            f"🗓️ {pretty_date(date_str)} it is — dinner at {entry['name']}!",
+            f"{user['name']} locked it in on {wheel['name']} — pop it in your calendar 📅",
+            wheel,
+            tag=f"{wheel['id']}-poll-{entry_id}",
+        )
+        return jsonify({"history": history_view(db, wheel, user)})
+
+
+@app.delete("/api/wheels/<wheel_id>/history/<entry_id>/poll")
+def delete_poll(wheel_id, entry_id):
+    """Scrap the poll — also the 'unlock and pick a new date' path. Any
+    member may, like clearing the history (household trust)."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel, entry = restaurant_poll_entry(db, user, wheel_id, entry_id)
+        if entry.pop("poll", None) is not None:
+            entry.pop("trip_date", None)  # a scrapped lock frees the date too
+            save_db(db)
+        return jsonify({"history": history_view(db, wheel, user)})
 
 
 # ── Static site ──────────────────────────────────────────────────────

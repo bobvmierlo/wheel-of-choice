@@ -331,6 +331,7 @@
     adminBtn.hidden = !me.user.admin;
     notifyBtn.hidden = false;
     syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
+    syncCalendarButton(); // shows 📆 only if the server can read calendars
     const invite = inviteCode;
     inviteCode = '';
     inviteBanner.hidden = true;
@@ -961,6 +962,474 @@
     renderNotifyModal();
   });
 
+  // ── Date polls & calendars (restaurant wheels) ────────────────────
+  // After a restaurant pick, members settle an evening: a Doodle-style
+  // poll on the history entry. Each member may link their own calendar
+  // by its secret ICS URL so the grid pre-marks their busy evenings —
+  // shown only to them; the others see only the dates people tick.
+  const calendarBtn = document.getElementById('calendar-btn');
+  const calendarModal = document.getElementById('calendar-modal');
+  const closeCalendarBtn = document.getElementById('close-calendar-btn');
+  const calendarState = document.getElementById('calendar-state');
+  const calendarError = document.getElementById('calendar-error');
+  const feedList = document.getElementById('feed-list');
+  const feedForm = document.getElementById('feed-form');
+  const feedUrl = document.getElementById('feed-url');
+  const feedLabel = document.getElementById('feed-label');
+  const feedAddBtn = document.getElementById('feed-add-btn');
+
+  const infoPoll = document.getElementById('info-poll');
+  const infoPollSummary = document.getElementById('info-poll-summary');
+  const infoPollActions = document.getElementById('info-poll-actions');
+
+  const pollModal = document.getElementById('poll-modal');
+  const closePollBtn = document.getElementById('close-poll-btn');
+  const pollTitle = document.getElementById('poll-title');
+  const pollSub = document.getElementById('poll-sub');
+  const pollPropose = document.getElementById('poll-propose');
+  const pollVoteView = document.getElementById('poll-vote');
+  const pollLegend = document.getElementById('poll-legend');
+  const pollVoteLegend = document.getElementById('poll-vote-legend');
+  const dateGrid = document.getElementById('date-grid');
+  const pollCreateBtn = document.getElementById('poll-create-btn');
+  const pollRows = document.getElementById('poll-rows');
+  const pollFoot = document.getElementById('poll-foot');
+  const pollScrapBtn = document.getElementById('poll-scrap-btn');
+  const pollError = document.getElementById('poll-error');
+
+  const GRID_WEEKS = 5;  // weeks shown in the propose grid (≈ a month ahead)
+
+  let pollEntryId = null;
+  let pollSelected = new Set();  // candidate dates while proposing
+  let myVote = new Set();        // this member's ticks while voting
+  let pollAvail = {};            // date → 'busy'|'free'|'unknown' (viewer's own)
+  let pollLinked = false;        // viewer has a calendar linked
+  let pollCalEnabled = false;    // server can read calendars at all
+
+  function isoLocal(d) {
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  }
+
+  function prettyDate(iso) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
+  }
+
+  function currentPollEntry() {
+    return state.history.find((e) => e.id === pollEntryId) || null;
+  }
+
+  function ghostBtn(parent, label, onClick) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'btn btn-ghost btn-small';
+    b.textContent = label;
+    b.addEventListener('click', onClick);
+    parent.append(b);
+    return b;
+  }
+
+  // Add-to-calendar without any API: a floating-time VEVENT the device
+  // reads in its own zone (right for a dinner), and a Google template URL.
+  function icsForPick(name, dateStr) {
+    const day = dateStr.replace(/-/g, '');
+    const uid = `wheel-${dateStr}-${Math.random().toString(36).slice(2)}@wheel-of-choice`;
+    return [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wheel of Choice//EN', 'BEGIN:VEVENT',
+      `UID:${uid}`, `DTSTART:${day}T190000`, `DTEND:${day}T210000`,
+      `SUMMARY:🍽️ ${name}`, `LOCATION:${name}`, 'END:VEVENT', 'END:VCALENDAR',
+    ].join('\r\n');
+  }
+
+  function downloadIcs(name, dateStr) {
+    const blob = new Blob([icsForPick(name, dateStr)], { type: 'text/calendar' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `dinner-${name.replace(/[^\w]+/g, '-').toLowerCase()}.ics`;
+    document.body.append(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function googleCalUrl(name, dateStr) {
+    const day = dateStr.replace(/-/g, '');
+    const dates = `${day}T190000/${day}T210000`;  // leave the slash literal — Google wants it raw
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE'
+      + `&text=${encodeURIComponent('🍽️ ' + name)}&dates=${dates}`
+      + `&details=${encodeURIComponent('Locked in with Wheel of Choice')}`;
+  }
+
+  // ── Info-modal poll section ───────────────────────────────────────
+  function renderInfoPoll() {
+    const entry = infoEntry;
+    if (!entry || isTravelWheel()) { infoPoll.hidden = true; return; }
+    infoPoll.hidden = false;
+    const poll = entry.poll;
+    infoPollActions.innerHTML = '';
+    if (!poll) {
+      infoPollSummary.textContent = "Great pick — now find an evening you're all free 🗳️";
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-primary btn-small';
+      b.textContent = '📅 Start a date poll';
+      b.addEventListener('click', () => openPollModal(entry, 'propose'));
+      infoPollActions.append(b);
+    } else if (poll.status === 'locked') {
+      infoPollSummary.textContent = `🗓️ ${prettyDate(poll.locked_date)} — it's a date!`;
+      ghostBtn(infoPollActions, '⬇️ Add to calendar (.ics)', () => downloadIcs(entry.name, poll.locked_date));
+      const g = document.createElement('a');
+      g.className = 'btn btn-ghost btn-small';
+      g.href = googleCalUrl(entry.name, poll.locked_date);
+      g.target = '_blank';
+      g.rel = 'noopener noreferrer';
+      g.textContent = '📆 Google Calendar';
+      infoPollActions.append(g);
+      const scrap = document.createElement('button');
+      scrap.type = 'button';
+      scrap.className = 'linklike';
+      scrap.textContent = 'Scrap the date & poll again…';
+      scrap.addEventListener('click', () => { pollEntryId = entry.id; scrapPoll(); });
+      infoPollActions.append(scrap);
+    } else {
+      const voted = poll.votes.length;
+      infoPollSummary.textContent = `${poll.dates.length} evenings up · ${voted} of ${poll.members} voted`
+        + (poll.waiting_names.length ? ` · waiting for ${poll.waiting_names.join(' & ')}` : '');
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'btn btn-primary btn-small';
+      b.textContent = '🗳️ Vote / view poll';
+      b.addEventListener('click', () => openPollModal(entry, 'vote'));
+      infoPollActions.append(b);
+    }
+  }
+
+  // ── Poll modal ────────────────────────────────────────────────────
+  async function loadPollAvailability() {
+    pollAvail = {};
+    pollLinked = false;
+    pollCalEnabled = false;
+    try {
+      const today = new Date(); today.setHours(0, 0, 0, 0);
+      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=${GRID_WEEKS * 7}`);
+      pollCalEnabled = !!(av && av.enabled);
+      pollLinked = !!(av && av.linked);
+      if (pollLinked && av.days) pollAvail = av.days;
+    } catch { /* availability is a hint, never a blocker */ }
+  }
+
+  function setPollLegend(el) {
+    if (pollLinked) {
+      el.innerHTML = '<span class="cal-dot busy"></span>busy that evening'
+        + '<span class="cal-dot free"></span>free — <em>from your calendar; all still tappable</em>';
+    } else if (pollCalEnabled) {
+      el.textContent = '📆 Link your calendar (top bar) and your busy evenings mark themselves.';
+    } else {
+      el.textContent = '';
+    }
+  }
+
+  async function openPollModal(entry, mode) {
+    pollEntryId = entry.id;
+    pollError.textContent = '';
+    await loadPollAvailability();
+    const fresh = currentPollEntry() || entry;
+    if (mode === 'propose' && !fresh.poll) showPollPropose(fresh);
+    else showPollVote(fresh);
+    if (!pollModal.open) pollModal.showModal();
+  }
+
+  function buildDateGrid() {
+    dateGrid.innerHTML = '';
+    const today = new Date(); today.setHours(0, 0, 0, 0);
+    const todayIso = isoLocal(today);
+    const start = new Date(today);
+    start.setDate(today.getDate() - ((today.getDay() + 6) % 7));  // Monday of this week
+    for (let i = 0; i < GRID_WEEKS * 7; i++) {
+      const day = new Date(start); day.setDate(start.getDate() + i);
+      const iso = isoLocal(day);
+      const cell = document.createElement('button');
+      cell.type = 'button';
+      cell.className = 'day-cell';
+      cell.textContent = String(day.getDate());
+      if (iso < todayIso) {
+        cell.disabled = true;
+      } else {
+        cell.dataset.date = iso;
+        if (pollSelected.has(iso)) cell.classList.add('selected');
+        const st = pollAvail[iso];
+        if (st === 'busy') { cell.classList.add('busy'); cell.title = "you're busy that evening"; }
+        else if (st === 'unknown') cell.classList.add('unknown');
+        cell.addEventListener('click', () => {
+          if (pollSelected.has(iso)) pollSelected.delete(iso); else pollSelected.add(iso);
+          cell.classList.toggle('selected');
+          syncCreateBtn();
+        });
+      }
+      dateGrid.append(cell);
+    }
+  }
+
+  function syncCreateBtn() {
+    pollCreateBtn.disabled = pollSelected.size < 2;
+    pollCreateBtn.textContent = pollSelected.size < 2
+      ? 'Pick at least two evenings' : `📅 Put ${pollSelected.size} evenings up`;
+  }
+
+  function showPollPropose(entry) {
+    pollTitle.textContent = '🗳️ Find an evening';
+    pollSub.textContent = `Pick the evenings that could work for ${entry.flag} ${entry.name}, then put them to the group.`;
+    pollSelected = new Set();
+    setPollLegend(pollLegend);
+    buildDateGrid();
+    syncCreateBtn();
+    pollPropose.hidden = false;
+    pollVoteView.hidden = true;
+  }
+
+  function showPollVote(entry) {
+    const poll = entry.poll;
+    if (!poll) { showPollPropose(entry); return; }
+    pollTitle.textContent = poll.status === 'locked' ? "🗓️ It's a date" : '🗳️ When can everyone make it?';
+    pollSub.textContent = `${entry.flag} ${entry.name} · started by ${poll.by_name}`;
+    myVote = new Set(poll.my_dates || []);
+    setPollLegend(pollVoteLegend);
+    renderPollRows(entry);
+    pollPropose.hidden = true;
+    pollVoteView.hidden = false;
+  }
+
+  function renderPollRows(entry) {
+    const poll = entry.poll;
+    pollRows.innerHTML = '';
+    for (const date of poll.dates) {
+      const li = document.createElement('li');
+      li.className = 'poll-row';
+      const main = document.createElement('div');
+      main.className = 'poll-row-main';
+      const dl = document.createElement('div');
+      dl.className = 'poll-row-date';
+      dl.textContent = prettyDate(date);
+      const st = pollAvail[date];
+      if (st === 'busy' || st === 'free') {
+        const dot = document.createElement('span');
+        dot.className = `cal-dot ${st}`;
+        dl.append(dot);
+      }
+      const voters = document.createElement('div');
+      voters.className = 'poll-row-voters';
+      const yes = poll.votes.filter((v) => v.dates.includes(date)).map((v) => v.name);
+      voters.textContent = yes.length ? `👍 ${yes.join(' & ')}` : 'no one yet';
+      main.append(dl, voters);
+      li.append(main);
+      if (poll.status === 'locked') {
+        if (poll.locked_date === date) {
+          const badge = document.createElement('span');
+          badge.className = 'poll-locked';
+          badge.textContent = '🔒 locked';
+          li.append(badge);
+        }
+      } else {
+        const tick = document.createElement('button');
+        tick.type = 'button';
+        tick.className = 'poll-tick' + (myVote.has(date) ? ' on' : '');
+        tick.textContent = myVote.has(date) ? '✓ me' : 'I can';
+        tick.addEventListener('click', () => toggleVote(date));
+        li.append(tick);
+        if (poll.unanimous.includes(date)) {
+          const lock = document.createElement('button');
+          lock.type = 'button';
+          lock.className = 'btn btn-primary btn-small';
+          lock.textContent = 'Lock it in 🔒';
+          lock.addEventListener('click', () => lockDate(date));
+          li.append(lock);
+        }
+      }
+      pollRows.append(li);
+    }
+    if (poll.status === 'locked') {
+      pollFoot.textContent = `Locked in by ${poll.locked_by_name}. Enjoy! 🎉`;
+    } else if (poll.my_dates == null) {
+      pollFoot.textContent = 'Tick the evenings you can make.';
+    } else if (poll.waiting_names.length) {
+      pollFoot.textContent = `Waiting for ${poll.waiting_names.join(' & ')} to vote.`;
+    } else if (!poll.unanimous.length) {
+      pollFoot.textContent = "No evening works for everyone yet 😬 — scrap it and try different dates.";
+    } else {
+      pollFoot.textContent = "Everyone's voted — lock in an evening that works! 🔒";
+    }
+    pollScrapBtn.hidden = false;
+  }
+
+  function syncPollFromHistory(history) {
+    state.history = history;
+    renderHistory();
+    if (infoEntry) {
+      const updated = state.history.find((e) => e.id === infoEntry.id);
+      if (updated) infoEntry = updated;
+      renderInfoPoll();
+    }
+    if (pollModal.open && pollPropose.hidden) {  // don't disturb an in-progress proposal
+      const entry = currentPollEntry();
+      if (entry) showPollVote(entry); else pollModal.close();
+    }
+  }
+
+  async function toggleVote(date) {
+    if (myVote.has(date)) myVote.delete(date); else myVote.add(date);
+    pollError.textContent = '';
+    try {
+      const res = await api(`/history/${pollEntryId}/poll/votes`, {
+        method: 'PUT', body: JSON.stringify({ dates: [...myVote] }),
+      });
+      syncPollFromHistory(res.history);
+    } catch (err) {
+      pollError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  async function lockDate(date) {
+    pollError.textContent = '';
+    try {
+      const res = await api(`/history/${pollEntryId}/poll/lock`, {
+        method: 'POST', body: JSON.stringify({ date }),
+      });
+      syncPollFromHistory(res.history);
+    } catch (err) {
+      pollError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  async function scrapPoll() {
+    if (!confirm('Scrap this date poll for everyone on the wheel?')) return;
+    pollError.textContent = '';
+    try {
+      const res = await api(`/history/${pollEntryId}/poll`, { method: 'DELETE' });
+      if (pollModal.open) pollModal.close();
+      syncPollFromHistory(res.history);
+    } catch (err) {
+      pollError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  pollCreateBtn.addEventListener('click', async () => {
+    const dates = [...pollSelected];
+    if (dates.length < 2) return;
+    pollError.textContent = '';
+    pollCreateBtn.disabled = true;
+    try {
+      const res = await api(`/history/${pollEntryId}/poll`, {
+        method: 'POST', body: JSON.stringify({ dates }),
+      });
+      syncPollFromHistory(res.history);
+      const entry = currentPollEntry();
+      if (entry) showPollVote(entry);
+    } catch (err) {
+      pollError.textContent = `⚠️ ${err.message}`;
+      syncCreateBtn();
+    }
+  });
+
+  pollScrapBtn.addEventListener('click', scrapPoll);
+  closePollBtn.addEventListener('click', () => pollModal.close());
+
+  // Live updates: a partner's vote or a fresh lock lands via the 5s poll.
+  function reflectPollUpdates() {
+    if (infoEntry) {
+      const updated = state.history.find((e) => e.id === infoEntry.id);
+      if (updated) { infoEntry = updated; renderInfoPoll(); }
+    }
+    if (pollModal.open && pollPropose.hidden) {
+      const entry = currentPollEntry();
+      if (entry) showPollVote(entry); else pollModal.close();
+    }
+  }
+
+  // ── My calendars modal ────────────────────────────────────────────
+  async function syncCalendarButton() {
+    try {
+      const info = await rootApi('/me/calendars');
+      calendarBtn.hidden = !info.enabled;
+    } catch {
+      calendarBtn.hidden = true;
+    }
+  }
+
+  async function renderCalendarModal() {
+    calendarError.textContent = '';
+    try {
+      const info = await rootApi('/me/calendars');
+      if (!info.enabled) {
+        calendarState.textContent = "📴 This server can't read calendars yet — polls still work, "
+          + 'just without the busy-evening hints.';
+        feedForm.hidden = true;
+        feedList.innerHTML = '';
+        return;
+      }
+      feedList.innerHTML = '';
+      for (const feed of info.feeds) {
+        const li = document.createElement('li');
+        li.className = 'feed-row';
+        const main = document.createElement('div');
+        main.className = 'feed-row-main';
+        const lbl = document.createElement('div');
+        lbl.textContent = feed.label;
+        const host = document.createElement('div');
+        host.className = 'feed-row-host';
+        host.textContent = feed.host;
+        main.append(lbl, host);
+        const rm = document.createElement('button');
+        rm.type = 'button';
+        rm.className = 'btn btn-ghost btn-small';
+        rm.title = 'Remove this calendar';
+        rm.textContent = '✕';
+        rm.addEventListener('click', () => removeFeed(feed.id));
+        li.append(main, rm);
+        feedList.append(li);
+      }
+      feedForm.hidden = info.feeds.length >= 4;
+      calendarState.textContent = info.feeds.length
+        ? `${info.feeds.length} calendar${info.feeds.length === 1 ? '' : 's'} linked — only you see your busy evenings.`
+        : 'No calendars linked yet.';
+    } catch (err) {
+      calendarState.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  async function removeFeed(id) {
+    calendarError.textContent = '';
+    try {
+      await rootApi(`/me/calendars/${id}`, { method: 'DELETE' });
+      await renderCalendarModal();
+    } catch (err) {
+      calendarError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  calendarBtn.addEventListener('click', () => { calendarModal.showModal(); renderCalendarModal(); });
+  closeCalendarBtn.addEventListener('click', () => calendarModal.close());
+
+  feedForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    calendarError.textContent = '';
+    feedAddBtn.disabled = true;
+    try {
+      const res = await rootApi('/me/calendars', {
+        method: 'POST',
+        body: JSON.stringify({ url: feedUrl.value.trim(), label: feedLabel.value.trim() }),
+      });
+      feedUrl.value = '';
+      feedLabel.value = '';
+      await renderCalendarModal();
+      calendarState.textContent = `Linked ✓ — ${res.busy_days} busy evening${res.busy_days === 1 ? '' : 's'} spotted in the next couple of months.`;
+    } catch (err) {
+      calendarError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      feedAddBtn.disabled = false;
+    }
+  });
+
   // ── Admin modal ───────────────────────────────────────────────────
   adminBtn.addEventListener('click', async () => {
     adminError.textContent = '';
@@ -1421,6 +1890,7 @@
     renderLinkList(infoPlan, planLinks(name));
     infoStatus.hidden = !infoEntry || !isTravelWheel();
     if (infoEntry && isTravelWheel()) syncStatusControls();
+    renderInfoPoll();  // restaurant history entries get the date-poll section
     infoEditHint.hidden = !d;
     infoEditBtn.hidden = !d;
     infoEditBtn.onclick = () => {
@@ -1641,6 +2111,7 @@
       if (JSON.stringify(history) !== JSON.stringify(state.history)) {
         state.history = history;
         renderHistory();
+        reflectPollUpdates();  // a partner's vote or a fresh lock just landed
         // a history change can also change the wheel: someone may have
         // starred, edited, or marked an entry "been there"
         state.destinations = await api('/destinations');

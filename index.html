@@ -22,6 +22,7 @@
       <span class="account-name" id="account-name"></span>
       <button type="button" class="btn btn-ghost btn-small" id="admin-btn" hidden>🛠️ Admin</button>
       <button type="button" class="btn btn-ghost btn-small" id="notify-btn" title="Notifications" hidden>🔔</button>
+      <button type="button" class="btn btn-ghost btn-small" id="calendar-btn" title="My calendars" hidden>📆</button>
       <button type="button" class="btn btn-ghost btn-small" id="share-btn" hidden>🔗 Share</button>
       <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
     </div>
@@ -311,6 +312,11 @@
       <p class="manage-hint">Marking a pick “✅ Been there” takes it off the wheel
         (re-tick it in ⚙️ Manage the wheel to bring it back).</p>
     </div>
+    <div class="info-poll" id="info-poll" hidden>
+      <h3>🗳️ When are we going?</h3>
+      <p class="info-poll-summary" id="info-poll-summary"></p>
+      <div class="info-poll-actions" id="info-poll-actions"></div>
+    </div>
     <p class="manage-hint" id="info-edit-hint">Add your own notes and links — hotel finds, blog posts, that one
       dish you have to try.</p>
     <button type="button" class="btn btn-ghost" id="info-edit-btn">✏️ Edit notes &amp; links</button>
@@ -369,6 +375,64 @@
       <button type="button" class="btn btn-ghost" id="notify-disable" hidden>🔕 Turn off for this device</button>
     </div>
     <p class="form-error" id="notify-error" role="alert"></p>
+  </dialog>
+
+  <!-- ── Date poll modal (restaurant wheels) ────────────────────────── -->
+  <dialog id="poll-modal" class="modal manage-modal">
+    <div class="manage-header">
+      <h2 id="poll-title">🗳️ Find an evening</h2>
+      <button type="button" class="btn btn-ghost" id="close-poll-btn">Close</button>
+    </div>
+    <p class="manage-hint" id="poll-sub"></p>
+
+    <!-- propose mode: pick candidate evenings from a grid -->
+    <div id="poll-propose" hidden>
+      <div class="cal-legend" id="poll-legend"></div>
+      <div class="date-grid-head" aria-hidden="true">
+        <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span>
+        <span>Fri</span><span>Sat</span><span>Sun</span>
+      </div>
+      <div class="date-grid" id="date-grid"></div>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary" id="poll-create-btn">📅 Put these evenings up</button>
+      </div>
+    </div>
+
+    <!-- vote mode: tick the evenings that work, lock a unanimous one -->
+    <div id="poll-vote" hidden>
+      <div class="cal-legend" id="poll-vote-legend"></div>
+      <ul class="poll-rows" id="poll-rows"></ul>
+      <p class="poll-foot" id="poll-foot"></p>
+      <p class="share-leave-row">
+        <button type="button" class="linklike" id="poll-scrap-btn">Scrap this poll &amp; start over…</button>
+      </p>
+    </div>
+    <p class="form-error" id="poll-error" role="alert"></p>
+  </dialog>
+
+  <!-- ── My calendars modal (secret ICS feeds) ──────────────────────── -->
+  <dialog id="calendar-modal" class="modal share-modal">
+    <div class="manage-header">
+      <h2>📆 My calendars</h2>
+      <button type="button" class="btn btn-ghost" id="close-calendar-btn">Close</button>
+    </div>
+    <p class="manage-hint">Link your own calendar and date-poll grids mark the evenings
+      you're busy, just for you — the others only ever see the dates you tick. Paste its
+      <strong>secret iCal address</strong> (Google Calendar → Settings → your calendar →
+      “Secret address in iCal format”; Outlook, iCloud and Nextcloud have one too). It's
+      read-only and never shared.</p>
+    <p class="push-state" id="calendar-state" role="status"></p>
+    <ul class="dest-list feed-list" id="feed-list"></ul>
+    <form id="feed-form" class="add-form" hidden>
+      <div class="add-grid">
+        <input type="url" id="feed-url" placeholder="https://… .ics  (or webcal://…)" required maxlength="500">
+        <input type="text" id="feed-label" placeholder="Label, e.g. Work" maxlength="40">
+      </div>
+      <div class="form-actions">
+        <button type="submit" class="btn btn-primary" id="feed-add-btn">➕ Link this calendar</button>
+      </div>
+    </form>
+    <p class="form-error" id="calendar-error" role="alert"></p>
   </dialog>
 
   <!-- ── Admin modal ────────────────────────────────────────────────── -->

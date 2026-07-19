@@ -81,6 +81,14 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   planning searches — ✈️ flights and 🛏️ stays for travel wheels, 📍 a
   maps lookup for restaurants; the spin result shows the notes and links
   too, so you can start planning right away.
+- **Date polls** 🗳️ (restaurant wheels) — once the wheel picks *where*,
+  settle *when*: open the pick and start a Doodle-style poll, everyone
+  ticks the evenings they can make, and any evening you all agree on
+  locks in with a tap (then drops into your calendar as an .ics or
+  Google link). Optionally link your own calendar by its secret iCal
+  address — no Google account or app needed — and the date grid marks
+  the evenings you're already busy, just for you. Setup in
+  [Date polls & calendars](#️-date-polls--calendars-restaurant-wheels).
 - **Push notifications** 🔔 — optional, per device: get a ping when
   someone spins and waits for your thumbs-up, when a pick gets vetoed,
   when the decision is final, and when a member adds a new entry to a
@@ -264,6 +272,73 @@ per wheel:
   and then. The app re-registers on every login and the server drops
   dead endpoints automatically, so a visit to the app usually heals it;
   otherwise toggle 🔔 off and on.
+
+## 🗳️ Date polls & calendars (restaurant wheels)
+
+Once a restaurant wheel lands on a place, you still have to agree on a
+*night*. Open the pick from the 📖 spin history and hit **📅 Start a
+date poll**: put up a handful of evenings, everyone ticks the ones they
+can make, and any evening everyone ticked can be **locked in** with one
+tap. It rides the same live sync and 🔔 notifications as the rest of the
+wheel — a partner's vote or a locked date shows up within a few seconds,
+and once it's locked you get **⬇️ Add to calendar (.ics)** and **📆
+Google Calendar** buttons (both built on the spot, no account needed).
+
+Polls work on their own — but they get nicer if members link a calendar,
+so the date grid can pre-mark the evenings they're already busy.
+
+### Linking a calendar (optional)
+
+This uses your calendar's **secret iCal address** — read-only, no OAuth,
+no Google Cloud project, nothing to sign up for. Your busy/free is worked
+out on the server and shown **only to you**; the others just see the
+dates you tick. The secret URL is stored on the server and never handed
+back out to anyone (not even you — it's write-only once saved).
+
+**One-time server setup** — install the two optional libraries (without
+them, polls still work, just without the busy-evening hints):
+
+```bash
+sudo pip3 install icalendar recurring-ical-events   # --break-system-packages on Debian 12+
+# or, from a venv: pip install -r requirements.txt
+```
+
+Busy evenings are judged in local time (17:00–midnight). If your server
+isn't on Amsterdam time, set your zone — uncomment `WHEEL_TZ` in
+[`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service) (any
+[IANA name](https://en.wikipedia.org/wiki/List_of_tz_database_time_zones)
+like `Europe/London` or `America/New_York`), then restart.
+
+**Where each provider hides the secret address:**
+
+- **Google Calendar** — Settings → *(pick the calendar)* → *Integrate
+  calendar* → **Secret address in iCal format**. (Heads-up: Google's ICS
+  feed can lag a few hours behind live changes — fine for planning a
+  dinner, not minute-accurate.)
+- **Outlook / Microsoft 365** — Settings → Calendar → *Shared calendars*
+  → Publish a calendar → **ICS** link.
+- **Apple iCloud** — share the calendar as a *Public Calendar* and copy
+  the `webcal://` link (the app turns it into `https://` for you).
+- **Nextcloud** — calendar → … → *Copy private link* (the `?export`
+  `.ics` one).
+
+**Then, per person:** open **📆** in the top bar, paste the address, give
+it a label, and *Link this calendar*. You can link up to four (home,
+work, partner's shared calendar…). Everything you link is yours alone —
+each member does this on their own account.
+
+### Troubleshooting
+
+- *No 📆 button* — the `icalendar` / `recurring-ical-events` libraries
+  aren't installed, or the server wasn't restarted after installing them.
+- *"couldn't read that calendar"* — it must be an `https://` (or
+  `webcal://`) address the server can reach; double-check you copied the
+  **secret/private** iCal URL, not the calendar's web page.
+- *Busy evenings look off by an hour or on the wrong day* — set `WHEEL_TZ`
+  to your own timezone and restart.
+- *All-day events don't mark me busy* — on purpose: birthday and
+  public-holiday calendars would otherwise paint whole weeks red. Only
+  timed evening events (17:00 onward) count.
 
 ## Seed data & sources
 
