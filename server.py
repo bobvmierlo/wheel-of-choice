@@ -443,6 +443,9 @@ def load_db():
     if db.get("version", 0) < 3:
         db = migrate_db(db)
         save_db(db)
+    if not db.get("home_roam_backfilled"):
+        backfill_home_roam(db)  # stamp home/roam onto pre-existing wheels
+        save_db(db)
     apply_runtime_settings(db)  # keep the effective poll knobs in sync
     return ensure_admin(db)
 
@@ -1137,6 +1140,31 @@ def wheel_home_roam(wheel):
     else:
         roam = "close"
     return home, roam
+
+
+def stamp_home_roam(wheel):
+    """Persist the inferred home/roam onto a travel wheel so it stops
+    relying on inference. Returns True if anything changed. Home is only
+    written when it can be inferred confidently (roam always can be)."""
+    home, roam = wheel_home_roam(wheel)
+    changed = False
+    if home in HOME_REGIONS and wheel.get("home") != home:
+        wheel["home"] = home
+        changed = True
+    if roam in ROAM_DISTANCES and wheel.get("roam") != roam:
+        wheel["roam"] = roam
+        changed = True
+    return changed
+
+
+def backfill_home_roam(db):
+    """One-time pass that stamps home/roam onto travel wheels created
+    before we stored them. Runs once (guarded by a db marker) — wheels
+    made since always carry the answers from creation."""
+    for wheel in db.get("wheels", {}).values():
+        if is_travel(wheel):
+            stamp_home_roam(wheel)
+    db["home_roam_backfilled"] = True
 
 
 def seed_destinations(wheel_type, home, roam, vibes, budget, favorites, user_id):
@@ -1841,6 +1869,7 @@ def sync_catalog(wheel_id):
         if not is_travel(wheel):
             abort(400, description="only travel wheels are seeded from a catalogue")
         home, roam = wheel_home_roam(wheel)
+        stamped = stamp_home_roam(wheel)  # make the wheel self-describing
         allowed = ROAM_DISTANCES[roam]
         have = {d["id"] for d in wheel["destinations"]}
         added = []
@@ -1851,7 +1880,9 @@ def sync_catalog(wheel_id):
             added.append(build_catalog_destination(entry, distance, allowed))
         if added:
             wheel["destinations"].extend(added)
+        if added or stamped:
             save_db(db)
+        if added:
             on = sum(1 for d in added if d["enabled"])
             push_to_users(
                 [u for u in wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
