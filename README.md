@@ -14,7 +14,7 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   number of wheels (shown as tabs; ➕ creates or joins another one), and
   a wheel can be shared with any number of accounts. There are three
   kinds:
-  - 🌍 **Holidays** — whole-country destinations, seeded from the
+  - 🌍 **Holidays** — countries and larger regions, seeded from the
     catalogue via a few onboarding questions.
   - 🏙️ **City trips** — cities in and around Europe, seeded the same way.
   - 🍽️ **Restaurants** — a fully custom list: no seeding, you add every
@@ -362,7 +362,8 @@ each member does this on their own account.
 ## Seed data & sources
 
 The two starting catalogues —
-[`seed-destinations.json`](seed-destinations.json) (~85 countries) and
+[`seed-destinations.json`](seed-destinations.json) (~85 countries plus a
+handful of European regions like the Cotswolds, Alsace and Tuscany) and
 [`seed-citytrips.json`](seed-citytrips.json) (~125 cities) — were
 **hand-curated for this app**, not imported from an external dataset.
 (Restaurant wheels have no catalogue on purpose — every entry is yours.)
