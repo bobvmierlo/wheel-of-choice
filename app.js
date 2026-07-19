@@ -1117,15 +1117,16 @@
   }
 
   // ── Poll modal ────────────────────────────────────────────────────
-  async function loadPollAvailability() {
+  async function loadPollAvailability(fresh = false) {
     pollAvail = {};
     pollLinked = false;
     pollCalEnabled = false;
     try {
       const today = new Date(); today.setHours(0, 0, 0, 0);
       // ask for the widest window we support; the server clamps to its own
-      // horizon and tells us what that (admin-set) horizon actually is
-      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=366`);
+      // horizon and tells us what that (admin-set) horizon actually is.
+      // fresh=1 (when starting a poll) skips the feed cache for a live pull.
+      const av = await rootApi(`/me/availability?from=${isoLocal(today)}&days=366${fresh ? '&fresh=1' : ''}`);
       pollCalEnabled = !!(av && av.enabled);
       pollLinked = !!(av && av.linked);
       if (av && Number.isFinite(av.horizon_days)) pollHorizonDays = av.horizon_days;
@@ -1155,10 +1156,12 @@
   async function openPollModal(entry, mode) {
     pollEntryId = entry.id;
     pollError.textContent = '';
-    await loadPollAvailability();
-    const fresh = currentPollEntry() || entry;
-    if (mode === 'propose' && !fresh.poll) showPollPropose(fresh);
-    else showPollVote(fresh);
+    // starting a poll → pull the freshest calendar; viewing an existing one
+    // rides the cache (fast, and busy hints are only ever hints there)
+    await loadPollAvailability(mode === 'propose');
+    const latest = currentPollEntry() || entry;
+    if (mode === 'propose' && !latest.poll) showPollPropose(latest);
+    else showPollVote(latest);
     if (!pollModal.open) pollModal.showModal();
   }
 

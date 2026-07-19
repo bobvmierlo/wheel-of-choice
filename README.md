@@ -331,7 +331,8 @@ can then override.
 - **Google Calendar** — Settings → *(pick the calendar)* → *Integrate
   calendar* → **Secret address in iCal format**. (Heads-up: Google's ICS
   feed can lag a few hours behind live changes — fine for planning a
-  dinner, not minute-accurate.)
+  dinner, not minute-accurate. Opening a poll fetches your feeds fresh;
+  elsewhere their busy-sets are cached for 20 minutes.)
 - **Outlook / Microsoft 365** — Settings → Calendar → *Shared calendars*
   → Publish a calendar → **ICS** link.
 - **Apple iCloud** — share the calendar as a *Public Calendar* and copy

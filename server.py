@@ -904,16 +904,18 @@ def compute_busy(raw):
     return busy
 
 
-def cached_busy(url):
+def cached_busy(url, fresh=False):
     """This feed's busy-date set, fetched-and-cached. Returns None only
     when the feed has never yielded readable data; a fetch failure with a
     prior good result keeps serving the stale set (better than blank for
-    a home dinner poll)."""
+    a home dinner poll). `fresh=True` bypasses the TTL and refetches now —
+    used when a member opens a poll and wants the latest calendar."""
     now = time.time()
-    with _cal_lock:
-        entry = _cal_cache.get(url)
-        if entry and now - entry["at"] < ICS_TTL:
-            return entry["busy"]
+    if not fresh:
+        with _cal_lock:
+            entry = _cal_cache.get(url)
+            if entry and now - entry["at"] < ICS_TTL:
+                return entry["busy"]
     busy = None
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "wheel-of-choice"})
@@ -932,14 +934,15 @@ def cached_busy(url):
     return busy
 
 
-def busy_evenings_for(feeds):
+def busy_evenings_for(feeds, fresh=False):
     """(busy date-set, readable?) across a user's feeds. `readable` is
     False only when not one feed yielded data — callers then show
-    'unknown' rather than a confident 'free'."""
+    'unknown' rather than a confident 'free'. `fresh` forces a refetch,
+    bypassing the per-feed TTL cache."""
     busy = set()
     readable = False
     for feed in feeds:
-        result = cached_busy(feed["url"])
+        result = cached_busy(feed["url"], fresh=fresh)
         if result is not None:
             busy |= result
             readable = True
@@ -1041,7 +1044,9 @@ def availability():
     window. Only ever the caller's own feeds — a poll's other members see
     nothing but the ticks people choose to place. The poll horizon and
     evening hour ride along so the date grid can lay itself out to match
-    whatever the admin has configured."""
+    whatever the admin has configured. `?fresh=1` bypasses the feed cache
+    for an up-to-the-minute pull — the frontend sends it when a member
+    opens a poll to pick evenings."""
     with _lock:
         db = load_db()  # refreshes the effective poll knobs from settings
         user = current_user(db)
@@ -1060,7 +1065,8 @@ def availability():
         span = 28
     if not feeds:
         return jsonify({**config, "enabled": True, "linked": False, "days": {}})
-    busy, readable = busy_evenings_for(feeds)  # network I/O, no _lock held
+    fresh = request.args.get("fresh") in ("1", "true", "yes")
+    busy, readable = busy_evenings_for(feeds, fresh=fresh)  # network I/O, no _lock held
     days = {}
     for i in range(span):
         iso = (start + timedelta(days=i)).isoformat()
