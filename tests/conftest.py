@@ -33,6 +33,8 @@ def app():
         server.DB_FILE.unlink()
     # Reset in-memory caches that outlive a single db.json.
     server._cal_cache.clear()
+    with server._login_lock:
+        server._login_fails.clear()
     with server._update_check_lock:
         server._update_check_cache.update({"at": 0.0, "data": None})
     yield server.app
