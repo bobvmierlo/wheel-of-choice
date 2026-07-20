@@ -101,8 +101,13 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   app — without the app store.
 - **Admin** 🛠️ — the first account ever registered runs the place: it can
   make other users admin, pull someone out of every wheel they share,
-  delete accounts, download or restore a full backup of the database,
-  and trigger a server self-update (see below).
+  reset a locked-out user's password, delete accounts, download or
+  restore a full backup of the database, and trigger a server self-update
+  (see below). It also controls **who can sign up**: leave registration
+  **open** (anyone can create an account) or switch it to **invite-only**
+  for an internet-facing server — then hand out single-use **invite
+  links**, one per person, from the admin panel. (Wheel invite links keep
+  working regardless: sharing a wheel always lets the newcomer sign up.)
 
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions (expiring after 90

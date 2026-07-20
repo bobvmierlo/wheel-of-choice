@@ -478,6 +478,26 @@
       pull someone out of all the wheels they share with others (they keep their
       account and any wheels of their own), or delete an account for good.</p>
     <ul id="admin-user-list" class="dest-list admin-list"></ul>
+    <h3>Registration</h3>
+    <p class="manage-hint">When registration is open, anyone can create an account. On an
+      internet-facing server you'll usually want it closed, and to invite people one link
+      at a time. (Wheel invite links keep working either way — sharing a wheel always lets
+      the newcomer sign up.)</p>
+    <label class="admin-setting reg-toggle">
+      <span class="admin-setting-label">🔓 Open registration</span>
+      <span class="admin-setting-field">
+        <input type="checkbox" id="setting-registration-open">
+        <span class="admin-setting-suffix" id="registration-open-label">—</span>
+      </span>
+      <span class="admin-setting-hint">Off = invite-only: only people with an invite link (below) or a wheel invite can sign up.</span>
+    </label>
+    <p class="manage-hint">Invite links each let <strong>one</strong> person create an
+      account, then stop working. Hand them out when registration is closed.</p>
+    <ul id="invite-list" class="dest-list invite-list"></ul>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" id="create-invite-btn">➕ Create invite link</button>
+    </div>
+    <p class="update-status" id="registration-status" role="status"></p>
     <h3>Date polls</h3>
     <p class="manage-hint">Tune the restaurant date polls for everyone on this server.
       Changes apply to new and in-progress polls straight away.</p>

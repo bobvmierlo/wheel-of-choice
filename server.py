@@ -191,6 +191,8 @@ def settings_view(db):
         "timezone": clean_timezone(stored.get("timezone"), DEFAULT_TZ),
         "evening_from": clamp_evening_from(stored.get("evening_from"), DEFAULT_EVENING_FROM),
         "poll_horizon_days": clamp_horizon(stored.get("poll_horizon_days"), DEFAULT_POLL_HORIZON_DAYS),
+        # Open by default so existing servers behave exactly as before.
+        "registration_open": bool(stored.get("registration_open", True)),
         "defaults": {
             "timezone": DEFAULT_TZ,
             "evening_from": DEFAULT_EVENING_FROM,
@@ -661,23 +663,39 @@ def register():
         db = load_db()
         if any(u["name"].lower() == name.lower() for u in db["users"].values()):
             abort(400, description="that name is already taken — log in instead?")
+        first_account = not db["users"]  # the very first account bootstraps the server
+        # A code can be a wheel's share code (join that wheel) or an admin
+        # account-invite (create an account, join nothing). Wheels win the
+        # namespace; invites never collide with a wheel code (see below).
         wheel = None
+        invite = None
         if code:
             wheel = next((w for w in db["wheels"].values() if w["code"] == code), None)
             if wheel is None:
+                invite = db.get("invites", {}).get(code)
+            if wheel is None and invite is None:
                 abort(400, description="that invite link doesn't work (anymore) — "
                                        "ask for a fresh one, or register without it")
+        # Closed registration keeps casual sign-ups out on an internet-facing
+        # server. The first account and anyone holding a valid invite (wheel
+        # or admin) still get through.
+        if not first_account and not settings_view(db)["registration_open"] \
+                and wheel is None and invite is None:
+            abort(403, description="registration is invite-only on this server right now — "
+                                   "ask an admin for an invite link")
         user = {
             "id": "u-" + uuid.uuid4().hex[:10],
             "name": name,
             "salt": secrets.token_hex(16),
             "wheels": [wheel["id"]] if wheel else [],
             "prefs": {},
-            "admin": not db["users"],  # the very first account runs the place
+            "admin": first_account,
             "created": datetime.now(timezone.utc).isoformat(),
         }
         user["password"] = hash_password(password, user["salt"])
         db["users"][user["id"]] = user
+        if invite:
+            db.setdefault("invites", {}).pop(code, None)  # single-use — spent now
         token = start_session(db, user)
         save_db(db)
         me = me_payload(db, user)
@@ -1533,10 +1551,10 @@ def admin_get_settings():
 
 @app.put("/api/admin/settings")
 def admin_put_settings():
-    """Tune the three poll knobs — the timezone, when an evening starts, and
-    how far ahead a poll may reach. Values are clamped/validated; the
-    calendar cache is cleared so busy hints recompute against the new
-    timezone and window."""
+    """Tune the server settings: the three poll knobs (timezone, when an
+    evening starts, how far ahead a poll may reach) and whether open
+    registration is on. Values are clamped/validated; the calendar cache
+    is cleared so busy hints recompute against the new timezone/window."""
     payload = request.get_json(force=True, silent=True) or {}
     with _lock:
         db = load_db()
@@ -1551,12 +1569,67 @@ def admin_put_settings():
         if "poll_horizon_days" in payload:
             stored["poll_horizon_days"] = clamp_horizon(
                 payload.get("poll_horizon_days"), current["poll_horizon_days"])
+        if "registration_open" in payload:
+            stored["registration_open"] = bool(payload.get("registration_open"))
         save_db(db)
         apply_runtime_settings(db)
         view = settings_view(db)
     with _cal_lock:  # busy-sets were digested against the old timezone/window
         _cal_cache.clear()
     return jsonify(view)
+
+
+# ── Account invites ──────────────────────────────────────────────────
+# When registration is closed, an admin hands out single-use invite codes
+# so specific people can still create an account. They share the code
+# format with wheel codes but live in their own bucket and are minted so
+# they never collide with a wheel's code.
+def invite_view(db):
+    invites = db.get("invites", {}) or {}
+    return sorted(
+        ({"code": inv["code"], "created": inv.get("created"), "by": inv.get("by_name", "")}
+         for inv in invites.values()),
+        key=lambda i: i.get("created") or "", reverse=True,
+    )
+
+
+@app.get("/api/admin/invites")
+def admin_list_invites():
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        return jsonify(invite_view(db))
+
+
+@app.post("/api/admin/invites")
+def admin_create_invite():
+    with _lock:
+        db = load_db()
+        admin = require_admin(db)
+        invites = db.setdefault("invites", {})
+        wheel_codes = {w["code"] for w in db["wheels"].values()}
+        code = new_invite_code()
+        while code in invites or code in wheel_codes:  # keep the namespaces disjoint
+            code = new_invite_code()
+        invites[code] = {
+            "code": code,
+            "created": datetime.now(timezone.utc).isoformat(),
+            "by": admin["id"],
+            "by_name": admin["name"],
+        }
+        save_db(db)
+        return jsonify({"code": code, "invites": invite_view(db)}), 201
+
+
+@app.delete("/api/admin/invites/<code>")
+def admin_revoke_invite(code):
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        if db.setdefault("invites", {}).pop(code, None) is None:
+            abort(404, description="no such invite (already used or revoked?)")
+        save_db(db)
+        return jsonify(invite_view(db))
 
 
 @app.put("/api/admin/users/<user_id>")
@@ -1726,6 +1799,19 @@ def version():
         "server_started": SERVER_STARTED,
         "update_pending": UPDATE_FLAG.exists(),
     })
+
+
+@app.get("/api/config")
+def public_config():
+    """The handful of facts the logged-out screen needs before anyone's
+    authenticated — currently just whether open registration is on, so it
+    can show or hide the 'Create account' tab. Nothing sensitive: with no
+    accounts yet the server always allows the first sign-up, so this
+    reports open until that bootstrap account exists."""
+    with _lock:
+        db = load_db()
+        open_reg = settings_view(db)["registration_open"] or not db["users"]
+    return jsonify({"registration_open": bool(open_reg)})
 
 
 # ── Validation ───────────────────────────────────────────────────────

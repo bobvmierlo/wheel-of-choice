@@ -22,13 +22,18 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   let token = localStorage.getItem(TOKEN_KEY) || '';
   let me = null; // { user: {id, name, admin}, prefs, wheels: [{id, type, name, code, members}] }
 
-  // An invite link (?join=CODE) pre-fills the join flow: registering
-  // through it joins that wheel right away, logging in gets the code
-  // filled in wherever a join field is available.
+  // Two kinds of invite link pre-fill the join flow, both carried into
+  // registration as `code`:
+  //   ?join=CODE   — a wheel's share code: registering joins that wheel.
+  //   ?invite=CODE — an admin account invite: registering just creates
+  //                  the account (used when open registration is off).
   const urlParams = new URLSearchParams(location.search);
-  let inviteCode = (urlParams.get('join') || '').toUpperCase().replace(/\s+/g, '');
-  if (urlParams.has('join')) {
+  const accountInvite = urlParams.has('invite') && !urlParams.has('join');
+  let inviteCode = (urlParams.get('join') || urlParams.get('invite') || '')
+    .toUpperCase().replace(/\s+/g, '');
+  if (urlParams.has('join') || urlParams.has('invite')) {
     urlParams.delete('join');
+    urlParams.delete('invite');
     const qs = urlParams.toString();
     history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
   }
@@ -191,6 +196,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const authPassword = document.getElementById('auth-password');
   const authSubmit = document.getElementById('auth-submit');
   const authError = document.getElementById('auth-error');
+  const authHint = document.getElementById('auth-hint');
 
   const onboardTitle = document.getElementById('onboard-title');
   const onboardSubmit = document.getElementById('onboard-submit');
@@ -373,6 +379,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     localStorage.removeItem(TOKEN_KEY);
     clearTimeout(prefsTimer);
     showView('auth');
+    if (!inviteCode) applyRegistrationGate();
   }
 
   // ── Wheel tabs (one per wheel + "add") ────────────────────────────
@@ -1514,6 +1521,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     adminModal.showModal();
     loadVersion(); // another admin may have updated in the meantime
     loadAdminSettings(); // another admin may have retuned the polls
+    registrationStatus.textContent = '';
+    loadInvites(); // list any pending invite links
     startUpdatePolling(); // watch git for a newer commit while the panel's open
     try {
       renderAdminUsers(await rootApi('/admin/users'));
@@ -1531,12 +1540,16 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const settingHorizon = document.getElementById('setting-horizon');
   const settingsSaveBtn = document.getElementById('settings-save-btn');
   const settingsStatus = document.getElementById('settings-status');
+  const settingRegistrationOpen = document.getElementById('setting-registration-open');
+  const registrationOpenLabel = document.getElementById('registration-open-label');
   let tzListLoaded = false;
 
   function fillSettings(s) {
     settingTimezone.value = s.timezone;
     settingEveningFrom.value = s.evening_from;
     settingHorizon.value = s.poll_horizon_days;
+    settingRegistrationOpen.checked = !!s.registration_open;
+    registrationOpenLabel.textContent = s.registration_open ? 'open to everyone' : 'invite-only';
     const [eMin, eMax] = s.bounds.evening_from;
     const [hMin, hMax] = s.bounds.poll_horizon_days;
     settingEveningFrom.min = eMin; settingEveningFrom.max = eMax;
@@ -1583,6 +1596,94 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       settingsStatus.textContent = `⚠️ ${err.message}`;
     } finally {
       settingsSaveBtn.disabled = false;
+    }
+  });
+
+  // ── Registration gate & account invites ───────────────────────────
+  const inviteList = document.getElementById('invite-list');
+  const createInviteBtn = document.getElementById('create-invite-btn');
+  const registrationStatus = document.getElementById('registration-status');
+
+  function accountInviteLink(code) {
+    return `${location.origin}${location.pathname}?invite=${encodeURIComponent(code)}`;
+  }
+
+  settingRegistrationOpen.addEventListener('change', async () => {
+    const open = settingRegistrationOpen.checked;
+    registrationStatus.textContent = '⏳ Saving…';
+    try {
+      fillSettings(await rootApi('/admin/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ registration_open: open }),
+      }));
+      registrationStatus.textContent = open
+        ? '✅ Registration is open — anyone can create an account.'
+        : '✅ Registration is invite-only — hand out invite links below.';
+    } catch (err) {
+      settingRegistrationOpen.checked = !open; // roll the switch back on failure
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  function renderInvites(invites) {
+    inviteList.innerHTML = '';
+    if (!invites.length) {
+      const li = document.createElement('li');
+      li.className = 'dest-meta';
+      li.textContent = 'No invite links yet — create one to invite someone.';
+      inviteList.append(li);
+      return;
+    }
+    for (const inv of invites) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'dest-name';
+      name.textContent = `🎟️ ${inv.code}`;
+      const meta = document.createElement('span');
+      meta.className = 'dest-meta';
+      meta.textContent = inv.by ? `made by ${inv.by}` : '';
+      li.append(name, meta);
+
+      li.append(adminActionBtn('🔗 Copy link', 'Copy this invite link to share', async (e) => {
+        const ok = await copyToClipboard(accountInviteLink(inv.code));
+        e.target.textContent = ok ? '✅ Copied' : '⚠️ Copy failed';
+        setTimeout(() => { e.target.textContent = '🔗 Copy link'; }, 1500);
+      }));
+      li.append(adminActionBtn('✕ Revoke', 'Delete this invite so it can no longer be used', async () => {
+        registrationStatus.textContent = '';
+        try {
+          renderInvites(await rootApi(`/admin/invites/${encodeURIComponent(inv.code)}`, { method: 'DELETE' }));
+        } catch (err) {
+          registrationStatus.textContent = `⚠️ ${err.message}`;
+        }
+      }));
+      inviteList.append(li);
+    }
+  }
+
+  async function loadInvites() {
+    try {
+      renderInvites(await rootApi('/admin/invites'));
+    } catch (err) {
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  createInviteBtn.addEventListener('click', async () => {
+    registrationStatus.textContent = '';
+    createInviteBtn.disabled = true;
+    try {
+      const res = await rootApi('/admin/invites', { method: 'POST' });
+      renderInvites(res.invites);
+      const link = accountInviteLink(res.code);
+      const copied = await copyToClipboard(link);
+      registrationStatus.textContent = copied
+        ? `✅ Invite link copied — send it to whoever you're inviting.`
+        : `✅ Invite ${res.code} created — copy its link below.`;
+    } catch (err) {
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      createInviteBtn.disabled = false;
     }
   });
 
@@ -2713,8 +2814,30 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     showView('auth');
     if (inviteCode) {
       document.querySelector('.auth-tabs .tab[data-mode="register"]').click();
-      inviteBanner.textContent = `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
+      inviteBanner.textContent = accountInvite
+        ? `🎟️ You've been invited to Wheel of Choice — create your account below.`
+        : `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
       inviteBanner.hidden = false;
+    } else {
+      applyRegistrationGate();
+    }
+  }
+
+  // On the logged-out screen, hide the "Create account" tab when the
+  // server has registration closed — signing up is invite-only then, and
+  // an invite link (handled above) is the way in. Idempotent, so it also
+  // corrects the tab after a later log-out. Fails open: if the check
+  // can't run, the tab is left as it is.
+  async function applyRegistrationGate() {
+    let open = true;
+    try {
+      open = (await rootApi('/config')).registration_open;
+    } catch { return; }
+    const registerTab = document.querySelector('.auth-tabs .tab[data-mode="register"]');
+    if (registerTab) registerTab.hidden = !open;
+    if (!open) {
+      document.querySelector('.auth-tabs .tab[data-mode="login"]').click(); // land on the login form
+      authHint.textContent = 'This server is invite-only — ask an admin for an invite link to create an account.';
     }
   }
 })();
