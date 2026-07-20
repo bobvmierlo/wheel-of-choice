@@ -24,6 +24,7 @@
       <button type="button" class="btn btn-ghost btn-small" id="notify-btn" title="Notifications" hidden>🔔</button>
       <button type="button" class="btn btn-ghost btn-small" id="calendar-btn" title="My calendars" hidden>📆</button>
       <button type="button" class="btn btn-ghost btn-small" id="share-btn" hidden>🔗 Share</button>
+      <button type="button" class="btn btn-ghost btn-small" id="password-btn" title="Change password" hidden>🔑</button>
       <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
     </div>
     <h1>🎡 Wheel of Choice</h1>
@@ -45,8 +46,8 @@
                  placeholder="e.g. Bob">
         </label>
         <label>Password
-          <input type="password" id="auth-password" autocomplete="current-password" minlength="4" required
-                 placeholder="At least 4 characters">
+          <input type="password" id="auth-password" autocomplete="current-password" minlength="1" required
+                 placeholder="Your password">
         </label>
         <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
         <p class="form-error" id="auth-error" role="alert"></p>
@@ -440,6 +441,33 @@
     <p class="form-error" id="calendar-error" role="alert"></p>
   </dialog>
 
+  <!-- ── Change-password modal ──────────────────────────────────────── -->
+  <dialog id="password-modal" class="modal share-modal">
+    <div class="manage-header">
+      <h2>🔑 Change password</h2>
+      <button type="button" class="btn btn-ghost" id="close-password-btn">Close</button>
+    </div>
+    <p class="manage-hint">Pick a new password for your account. You'll stay logged in
+      on this device; other devices keep their session too.</p>
+    <form id="password-form" class="auth-form">
+      <label>Current password
+        <input type="password" id="password-current" autocomplete="current-password" required
+               placeholder="Your current password">
+      </label>
+      <label>New password
+        <input type="password" id="password-new" autocomplete="new-password" minlength="8" required
+               placeholder="At least 8 characters">
+      </label>
+      <label>Repeat new password
+        <input type="password" id="password-confirm" autocomplete="new-password" minlength="8" required
+               placeholder="Type it again">
+      </label>
+      <button type="submit" class="btn btn-primary" id="password-submit">Change password</button>
+      <p class="push-state" id="password-state" role="status"></p>
+      <p class="form-error" id="password-error" role="alert"></p>
+    </form>
+  </dialog>
+
   <!-- ── Admin modal ────────────────────────────────────────────────── -->
   <dialog id="admin-modal" class="modal manage-modal">
     <div class="manage-header">
@@ -450,6 +478,26 @@
       pull someone out of all the wheels they share with others (they keep their
       account and any wheels of their own), or delete an account for good.</p>
     <ul id="admin-user-list" class="dest-list admin-list"></ul>
+    <h3>Registration</h3>
+    <p class="manage-hint">When registration is open, anyone can create an account. On an
+      internet-facing server you'll usually want it closed, and to invite people one link
+      at a time. (Wheel invite links keep working either way — sharing a wheel always lets
+      the newcomer sign up.)</p>
+    <label class="admin-setting reg-toggle">
+      <span class="admin-setting-label">🔓 Open registration</span>
+      <span class="admin-setting-field">
+        <input type="checkbox" id="setting-registration-open">
+        <span class="admin-setting-suffix" id="registration-open-label">—</span>
+      </span>
+      <span class="admin-setting-hint">Off = invite-only: only people with an invite link (below) or a wheel invite can sign up.</span>
+    </label>
+    <p class="manage-hint">Invite links each let <strong>one</strong> person create an
+      account, then stop working. Hand them out when registration is closed.</p>
+    <ul id="invite-list" class="dest-list invite-list"></ul>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" id="create-invite-btn">➕ Create invite link</button>
+    </div>
+    <p class="update-status" id="registration-status" role="status"></p>
     <h3>Date polls</h3>
     <p class="manage-hint">Tune the restaurant date polls for everyone on this server.
       Changes apply to new and in-progress polls straight away.</p>
@@ -581,6 +629,6 @@
     <span class="footer-version" id="footer-version"></span>
   </footer>
 
-  <script src="app.js"></script>
+  <script type="module" src="app.js"></script>
 </body>
 </html>

@@ -8,49 +8,32 @@
  * wheel, so people sharing a wheel each keep their own filters. Only
  * the login token is kept in this browser.
  */
+import {
+  VIBE_LABELS, BUDGET_LABELS, DISTANCE_LABELS, MULTI_FILTERS,
+  WHEEL_TYPE_META, SEGMENT_COLORS, TOKEN_KEY,
+} from './constants.js';
+import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './utils.js';
+
 (function () {
   'use strict';
-
-  const VIBE_LABELS = {
-    nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food',
-    beach: '🏖️ beach', nightlife: '🌃 nightlife', adventure: '🧗 adventure',
-    wellness: '💆 wellness', winter: '⛷️ snow',
-  };
-  const BUDGET_LABELS = { low: '💶 low budget', mid: '💶💶 mid budget', high: '💶💶💶 high budget' };
-  const DISTANCE_LABELS = { regional: '🚗 regional', europe: '✈️ Europe', longhaul: '🌏 long-haul' };
-  // Stars are per person (starred_by). One star doubles the wheel
-  // segment; starred by two people triples it. Entries from before
-  // per-person stars only carry the shared `favorite` flag — worth one.
-  const MULTI_FILTERS = ['budget', 'distance', 'vibe', 'season']; // 'party' stays single-choice
-
-  const WHEEL_TYPE_META = {
-    holidays: { icon: '🌍', kicker: 'Your next holiday is…', noun: 'destination' },
-    citytrips: { icon: '🏙️', kicker: 'Your next city trip is…', noun: 'destination' },
-    restaurants: { icon: '🍽️', kicker: 'Tonight you\'re eating at…', noun: 'restaurant' },
-  };
-
-  const SEGMENT_COLORS = [
-    '#ff5e7e', '#ffb84d', '#4dabff', '#6ee7a8',
-    '#c084fc', '#f97362', '#38d0e0', '#facc15',
-    '#fb7fb8', '#8aa9ff', '#5eddaf', '#ff9e6d',
-  ];
-
-  // key predates the rename to Wheel of Choice — changing it would log
-  // every existing browser out for nothing
-  const TOKEN_KEY = 'wheel-of-wander-token';
 
   // ── State ─────────────────────────────────────────────────────────
   let wheelId = ''; // current wheel id — resolved from /me + the URL hash
   let token = localStorage.getItem(TOKEN_KEY) || '';
   let me = null; // { user: {id, name, admin}, prefs, wheels: [{id, type, name, code, members}] }
 
-  // An invite link (?join=CODE) pre-fills the join flow: registering
-  // through it joins that wheel right away, logging in gets the code
-  // filled in wherever a join field is available.
+  // Two kinds of invite link pre-fill the join flow, both carried into
+  // registration as `code`:
+  //   ?join=CODE   — a wheel's share code: registering joins that wheel.
+  //   ?invite=CODE — an admin account invite: registering just creates
+  //                  the account (used when open registration is off).
   const urlParams = new URLSearchParams(location.search);
-  let inviteCode = (urlParams.get('join') || '').toUpperCase().replace(/\s+/g, '');
-  if (urlParams.has('join')) {
+  const accountInvite = urlParams.has('invite') && !urlParams.has('join');
+  let inviteCode = (urlParams.get('join') || urlParams.get('invite') || '')
+    .toUpperCase().replace(/\s+/g, '');
+  if (urlParams.has('join') || urlParams.has('invite')) {
     urlParams.delete('join');
+    urlParams.delete('invite');
     const qs = urlParams.toString();
     history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
   }
@@ -205,6 +188,7 @@
   const accountName = document.getElementById('account-name');
   const shareBtn = document.getElementById('share-btn');
   const adminBtn = document.getElementById('admin-btn');
+  const passwordBtn = document.getElementById('password-btn');
   const logoutBtn = document.getElementById('logout-btn');
 
   const authForm = document.getElementById('auth-form');
@@ -212,6 +196,7 @@
   const authPassword = document.getElementById('auth-password');
   const authSubmit = document.getElementById('auth-submit');
   const authError = document.getElementById('auth-error');
+  const authHint = document.getElementById('auth-hint');
 
   const onboardTitle = document.getElementById('onboard-title');
   const onboardSubmit = document.getElementById('onboard-submit');
@@ -335,6 +320,7 @@
     adminBtn.hidden = !me.user.admin;
     if (me.user.admin) checkForUpdate(); // light up the 🆕 dot if one's waiting
     notifyBtn.hidden = false;
+    passwordBtn.hidden = false;
     syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
     syncCalendarButton(); // shows 📆 only if the server can read calendars
     const invite = inviteCode;
@@ -393,6 +379,7 @@
     localStorage.removeItem(TOKEN_KEY);
     clearTimeout(prefsTimer);
     showView('auth');
+    if (!inviteCode) applyRegistrationGate();
   }
 
   // ── Wheel tabs (one per wheel + "add") ────────────────────────────
@@ -458,8 +445,13 @@
       document.querySelectorAll('.auth-tabs .tab').forEach((t) => {
         t.classList.toggle('active', t === tab);
       });
-      authSubmit.textContent = authMode === 'login' ? 'Log in' : 'Create account';
-      authPassword.autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
+      const registering = authMode === 'register';
+      authSubmit.textContent = registering ? 'Create account' : 'Log in';
+      authPassword.autocomplete = registering ? 'new-password' : 'current-password';
+      // Only new passwords must clear the 8-char floor. Login stays lenient
+      // so accounts created under the old 4-char rule can still get in.
+      authPassword.minLength = registering ? 8 : 1;
+      authPassword.placeholder = registering ? 'At least 8 characters' : 'Your password';
       authError.textContent = '';
     });
   });
@@ -1023,11 +1015,6 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  function prettyDate(iso) {
-    const [y, m, d] = iso.split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-  }
-
   function currentPollEntry() {
     return state.history.find((e) => e.id === pollEntryId) || null;
   }
@@ -1138,11 +1125,6 @@
   }
 
   // 17 → "5pm", 0 → "midnight", 12 → "noon" — a friendly evening-start label
-  function fmtHour(h) {
-    if (h === 0) return 'midnight';
-    if (h === 12) return 'noon';
-    return `${((h + 11) % 12) + 1}${h < 12 ? 'am' : 'pm'}`;
-  }
 
   function setPollLegend(el) {
     if (pollLinked) {
@@ -1468,6 +1450,50 @@
   calendarBtn.addEventListener('click', () => { calendarModal.showModal(); renderCalendarModal(); });
   closeCalendarBtn.addEventListener('click', () => calendarModal.close());
 
+  // ── Change your own password ─────────────────────────────────────
+  const passwordModal = document.getElementById('password-modal');
+  const closePasswordBtn = document.getElementById('close-password-btn');
+  const passwordForm = document.getElementById('password-form');
+  const passwordCurrent = document.getElementById('password-current');
+  const passwordNew = document.getElementById('password-new');
+  const passwordConfirm = document.getElementById('password-confirm');
+  const passwordSubmit = document.getElementById('password-submit');
+  const passwordState = document.getElementById('password-state');
+  const passwordError = document.getElementById('password-error');
+
+  passwordBtn.addEventListener('click', () => {
+    passwordForm.reset();
+    passwordState.textContent = '';
+    passwordError.textContent = '';
+    passwordModal.showModal();
+    passwordCurrent.focus();
+  });
+  closePasswordBtn.addEventListener('click', () => passwordModal.close());
+
+  passwordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    passwordError.textContent = '';
+    passwordState.textContent = '';
+    if (passwordNew.value !== passwordConfirm.value) {
+      passwordError.textContent = '⚠️ The two new passwords don\'t match';
+      return;
+    }
+    passwordSubmit.disabled = true;
+    try {
+      await rootApi('/me/password', {
+        method: 'PUT',
+        body: JSON.stringify({ current: passwordCurrent.value, new: passwordNew.value }),
+      });
+      passwordForm.reset();
+      passwordState.textContent = '✅ Password changed';
+      setTimeout(() => { if (passwordModal.open) passwordModal.close(); }, 1200);
+    } catch (err) {
+      passwordError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      passwordSubmit.disabled = false;
+    }
+  });
+
   feedForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     calendarError.textContent = '';
@@ -1495,6 +1521,8 @@
     adminModal.showModal();
     loadVersion(); // another admin may have updated in the meantime
     loadAdminSettings(); // another admin may have retuned the polls
+    registrationStatus.textContent = '';
+    loadInvites(); // list any pending invite links
     startUpdatePolling(); // watch git for a newer commit while the panel's open
     try {
       renderAdminUsers(await rootApi('/admin/users'));
@@ -1512,12 +1540,16 @@
   const settingHorizon = document.getElementById('setting-horizon');
   const settingsSaveBtn = document.getElementById('settings-save-btn');
   const settingsStatus = document.getElementById('settings-status');
+  const settingRegistrationOpen = document.getElementById('setting-registration-open');
+  const registrationOpenLabel = document.getElementById('registration-open-label');
   let tzListLoaded = false;
 
   function fillSettings(s) {
     settingTimezone.value = s.timezone;
     settingEveningFrom.value = s.evening_from;
     settingHorizon.value = s.poll_horizon_days;
+    settingRegistrationOpen.checked = !!s.registration_open;
+    registrationOpenLabel.textContent = s.registration_open ? 'open to everyone' : 'invite-only';
     const [eMin, eMax] = s.bounds.evening_from;
     const [hMin, hMax] = s.bounds.poll_horizon_days;
     settingEveningFrom.min = eMin; settingEveningFrom.max = eMax;
@@ -1564,6 +1596,94 @@
       settingsStatus.textContent = `⚠️ ${err.message}`;
     } finally {
       settingsSaveBtn.disabled = false;
+    }
+  });
+
+  // ── Registration gate & account invites ───────────────────────────
+  const inviteList = document.getElementById('invite-list');
+  const createInviteBtn = document.getElementById('create-invite-btn');
+  const registrationStatus = document.getElementById('registration-status');
+
+  function accountInviteLink(code) {
+    return `${location.origin}${location.pathname}?invite=${encodeURIComponent(code)}`;
+  }
+
+  settingRegistrationOpen.addEventListener('change', async () => {
+    const open = settingRegistrationOpen.checked;
+    registrationStatus.textContent = '⏳ Saving…';
+    try {
+      fillSettings(await rootApi('/admin/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ registration_open: open }),
+      }));
+      registrationStatus.textContent = open
+        ? '✅ Registration is open — anyone can create an account.'
+        : '✅ Registration is invite-only — hand out invite links below.';
+    } catch (err) {
+      settingRegistrationOpen.checked = !open; // roll the switch back on failure
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  function renderInvites(invites) {
+    inviteList.innerHTML = '';
+    if (!invites.length) {
+      const li = document.createElement('li');
+      li.className = 'dest-meta';
+      li.textContent = 'No invite links yet — create one to invite someone.';
+      inviteList.append(li);
+      return;
+    }
+    for (const inv of invites) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'dest-name';
+      name.textContent = `🎟️ ${inv.code}`;
+      const meta = document.createElement('span');
+      meta.className = 'dest-meta';
+      meta.textContent = inv.by ? `made by ${inv.by}` : '';
+      li.append(name, meta);
+
+      li.append(adminActionBtn('🔗 Copy link', 'Copy this invite link to share', async (e) => {
+        const ok = await copyToClipboard(accountInviteLink(inv.code));
+        e.target.textContent = ok ? '✅ Copied' : '⚠️ Copy failed';
+        setTimeout(() => { e.target.textContent = '🔗 Copy link'; }, 1500);
+      }));
+      li.append(adminActionBtn('✕ Revoke', 'Delete this invite so it can no longer be used', async () => {
+        registrationStatus.textContent = '';
+        try {
+          renderInvites(await rootApi(`/admin/invites/${encodeURIComponent(inv.code)}`, { method: 'DELETE' }));
+        } catch (err) {
+          registrationStatus.textContent = `⚠️ ${err.message}`;
+        }
+      }));
+      inviteList.append(li);
+    }
+  }
+
+  async function loadInvites() {
+    try {
+      renderInvites(await rootApi('/admin/invites'));
+    } catch (err) {
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  createInviteBtn.addEventListener('click', async () => {
+    registrationStatus.textContent = '';
+    createInviteBtn.disabled = true;
+    try {
+      const res = await rootApi('/admin/invites', { method: 'POST' });
+      renderInvites(res.invites);
+      const link = accountInviteLink(res.code);
+      const copied = await copyToClipboard(link);
+      registrationStatus.textContent = copied
+        ? `✅ Invite link copied — send it to whoever you're inviting.`
+        : `✅ Invite ${res.code} created — copy its link below.`;
+    } catch (err) {
+      registrationStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      createInviteBtn.disabled = false;
     }
   });
 
@@ -1664,6 +1784,27 @@
             body: JSON.stringify({ admin: !u.admin }),
           }))
         ));
+        li.append(adminActionBtn('🔑 Reset password',
+          'Set a temporary password and log them out everywhere', async () => {
+            const pw = prompt(`Set a temporary password for ${u.name} (at least 8 characters).\n`
+              + `They'll be logged out on every device and come back in with it — `
+              + `then they can change it themselves.`);
+            if (pw === null) return; // cancelled
+            if (pw.length < 8) {
+              adminError.textContent = '⚠️ That password is too short — at least 8 characters.';
+              return;
+            }
+            adminError.textContent = '';
+            try {
+              await rootApi(`/admin/users/${u.id}/password`, {
+                method: 'PUT',
+                body: JSON.stringify({ new: pw }),
+              });
+              adminError.textContent = `✅ ${u.name}'s password was reset — pass the new one along.`;
+            } catch (err) {
+              adminError.textContent = `⚠️ ${err.message}`;
+            }
+          }));
         if (u.sharing_with.length) {
           li.append(adminActionBtn('Unshare', 'Pull them out of every wheel they share', () => {
             if (!confirm(`Pull ${u.name} out of every wheel they share with ${u.sharing_with.join(', ')}? They keep their account and any wheels of their own.`)) return;
@@ -1693,13 +1834,6 @@
     const res = await fetch('/api/version');
     if (!res.ok) throw new Error(`Server said ${res.status}`);
     return res.json();
-  }
-
-  function formatDateTime(iso) {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime())
-      ? iso
-      : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   }
 
   function renderVersion() {
@@ -1968,10 +2102,13 @@
     spinBtn.disabled = true;
     wheelHint.textContent = 'Round and round it goes… 🤞';
 
+    // With reduced motion the wheel settles quickly onto its pick instead
+    // of the long dramatic spin — same landing, far less movement.
+    const reduce = prefersReducedMotion();
     const startRotation = rotation;
-    const extraTurns = 5 + Math.random() * 3;
+    const extraTurns = reduce ? 0 : 5 + Math.random() * 3;
     const targetRotation = startRotation + extraTurns * Math.PI * 2 + Math.random() * Math.PI * 2;
-    const duration = 4400;
+    const duration = reduce ? 700 : 4400;
     const startTime = performance.now();
 
     function frame(now) {
@@ -2300,6 +2437,7 @@
   let confettiRaf = null;
 
   function launchConfetti() {
+    if (prefersReducedMotion()) return;  // no celebratory shower if motion's dialled down
     const W = confettiCanvas.width;
     const H = confettiCanvas.height;
     const pieces = Array.from({ length: 90 }, () => ({
@@ -2676,8 +2814,30 @@
     showView('auth');
     if (inviteCode) {
       document.querySelector('.auth-tabs .tab[data-mode="register"]').click();
-      inviteBanner.textContent = `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
+      inviteBanner.textContent = accountInvite
+        ? `🎟️ You've been invited to Wheel of Choice — create your account below.`
+        : `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
       inviteBanner.hidden = false;
+    } else {
+      applyRegistrationGate();
+    }
+  }
+
+  // On the logged-out screen, hide the "Create account" tab when the
+  // server has registration closed — signing up is invite-only then, and
+  // an invite link (handled above) is the way in. Idempotent, so it also
+  // corrects the tab after a later log-out. Fails open: if the check
+  // can't run, the tab is left as it is.
+  async function applyRegistrationGate() {
+    let open = true;
+    try {
+      open = (await rootApi('/config')).registration_open;
+    } catch { return; }
+    const registerTab = document.querySelector('.auth-tabs .tab[data-mode="register"]');
+    if (registerTab) registerTab.hidden = !open;
+    if (!open) {
+      document.querySelector('.auth-tabs .tab[data-mode="login"]').click(); // land on the login form
+      authHint.textContent = 'This server is invite-only — ask an admin for an invite link to create an account.';
     }
   }
 })();

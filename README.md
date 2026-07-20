@@ -4,6 +4,19 @@ A tiny webapp that settles "where to next?" — and "where do we eat?" —
 with a wheel-of-fortune spin. A small Flask server stores accounts and
 wheels; the frontend is plain HTML/CSS/JS with no build step.
 
+## Screenshots
+
+A seeded holidays wheel, a spin result, customising the entries, and the
+admin panel — see the [`screenshots/`](screenshots/) folder for these
+full-size.
+
+| | |
+|:---:|:---:|
+| ![A seeded holidays wheel with trip-preference filters](screenshots/wheel.png) | ![A spin result showing the picked destination](screenshots/result.png) |
+| **The wheel** — filters, flags and favourites | **A spin result** — tags, notes and planning links |
+| ![Managing and customising the wheel's entries](screenshots/manage.png) | ![The admin panel with registration controls](screenshots/admin.png) |
+| **Manage the wheel** — add & tag your own | **Admin** — accounts, registration & invites |
+
 ## Features
 
 - **Accounts** 👤 — registering takes ten seconds: a name and a password,
@@ -101,8 +114,13 @@ wheels; the frontend is plain HTML/CSS/JS with no build step.
   app — without the app store.
 - **Admin** 🛠️ — the first account ever registered runs the place: it can
   make other users admin, pull someone out of every wheel they share,
-  delete accounts, download or restore a full backup of the database,
-  and trigger a server self-update (see below).
+  reset a locked-out user's password, delete accounts, download or
+  restore a full backup of the database, and trigger a server self-update
+  (see below). It also controls **who can sign up**: leave registration
+  **open** (anyone can create an account) or switch it to **invite-only**
+  for an internet-facing server — then hand out single-use **invite
+  links**, one per person, from the admin panel. (Wheel invite links keep
+  working regardless: sharing a wheel always lets the newcomer sign up.)
 
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions (expiring after 90
@@ -120,6 +138,18 @@ first account can adopt from the first-wheel screen.
 pip install -r requirements.txt   # or: apt install python3-flask
 python3 server.py
 # then open http://localhost:8000
+```
+
+### Tests
+
+The API has a [`pytest`](https://pytest.org) suite covering accounts,
+wheel creation and sharing, the round/veto/confirm handshake, database
+migration and the admin guardrails. Each test runs against a throwaway
+data directory, so it never touches your real `db.json`:
+
+```bash
+pip install pytest
+python3 -m pytest
 ```
 
 ## Deploying to a Linux server
@@ -403,5 +433,8 @@ sites, blogs, hotel pages, …) via ✏️ edit.
 - The wheel types and the tag/onboarding vocabulary (`budget`,
   `distance`, `vibes`, `seasons`, `party`, home regions, roam ranges)
   are defined at the top of [`server.py`](server.py).
-- Colors and styling live in [`styles.css`](styles.css); all frontend
-  logic is in [`app.js`](app.js).
+- Colors and styling live in [`styles.css`](styles.css); the frontend
+  logic is in [`app.js`](app.js) (loaded as an ES module), with the
+  shared constant tables in [`constants.js`](constants.js) and the
+  pure, state-free helpers in [`utils.js`](utils.js). No build step —
+  the browser loads the modules directly.

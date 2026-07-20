@@ -15,6 +15,7 @@ dist/
 __pycache__/
 venv/
 .venv/
+.pytest_cache/
 
 # Server-side app data (destinations & history live here at runtime)
 data/

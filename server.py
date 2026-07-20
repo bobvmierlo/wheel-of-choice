@@ -44,9 +44,11 @@ Run directly for a quick start:
 import base64
 import hashlib
 import hmac
+import ipaddress
 import json
 import os
 import secrets
+import socket
 import subprocess
 import threading
 import time
@@ -189,6 +191,8 @@ def settings_view(db):
         "timezone": clean_timezone(stored.get("timezone"), DEFAULT_TZ),
         "evening_from": clamp_evening_from(stored.get("evening_from"), DEFAULT_EVENING_FROM),
         "poll_horizon_days": clamp_horizon(stored.get("poll_horizon_days"), DEFAULT_POLL_HORIZON_DAYS),
+        # Open by default so existing servers behave exactly as before.
+        "registration_open": bool(stored.get("registration_open", True)),
         "defaults": {
             "timezone": DEFAULT_TZ,
             "evening_from": DEFAULT_EVENING_FROM,
@@ -220,6 +224,37 @@ ICS_MAX_BYTES = 2_000_000  # refuse calendars larger than this
 
 app = Flask(__name__)
 _lock = threading.Lock()
+
+# Cap request bodies so a malformed or malicious client can't make the
+# server buffer an unbounded payload in memory. The only legitimately
+# large body is an admin database restore, and a db.json anywhere near
+# this size would be an enormous instance — real requests stay far under.
+app.config["MAX_CONTENT_LENGTH"] = 16 * 1024 * 1024  # 16 MB
+
+# A tiny, self-contained page: everything it loads comes from its own
+# origin (bar the emoji favicon, a data: URI). The policy below says
+# exactly that, so an injected <script> or framing attempt has nowhere
+# to go. Kept in one place; applied to every response below.
+CONTENT_SECURITY_POLICY = "; ".join((
+    "default-src 'self'",
+    "img-src 'self' data:",
+    "style-src 'self' 'unsafe-inline'",
+    "script-src 'self'",
+    "connect-src 'self'",
+    "object-src 'none'",
+    "base-uri 'self'",
+    "frame-ancestors 'none'",
+))
+
+
+@app.after_request
+def security_headers(response):
+    response.headers.setdefault("Content-Security-Policy", CONTENT_SECURITY_POLICY)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "no-referrer")
+    return response
+
 
 SERVER_STARTED = datetime.now(timezone.utc).isoformat()
 
@@ -458,10 +493,59 @@ def save_db(db):
 
 
 # ── Accounts ─────────────────────────────────────────────────────────
+MIN_PASSWORD_LEN = 8  # for new/changed passwords; existing logins are unaffected
+
+
 def hash_password(password, salt_hex):
     return hashlib.scrypt(
         password.encode("utf-8"), salt=bytes.fromhex(salt_hex), n=16384, r=8, p=1
     ).hex()
+
+
+# ── Login throttling ─────────────────────────────────────────────────
+# Online password guessing is the realistic attack on a small,
+# network-exposed app. scrypt already makes each guess costly; this caps
+# how many wrong guesses one account can absorb in a window. It's keyed by
+# the *targeted account name*, not the source IP: behind a reverse proxy
+# every request shares one IP, so the account is the reliable signal — and
+# it means one account under attack can't lock the others out. In-memory
+# is fine here (single process; a restart just clears the counters).
+LOGIN_MAX_FAILS = 10       # wrong guesses tolerated within the window
+LOGIN_WINDOW = 15 * 60     # seconds the failures are counted over
+_login_fails = {}          # name(lower) -> [monotonic timestamps of recent fails]
+_login_lock = threading.Lock()
+
+
+def _throttle_key(name):
+    return name.strip().lower()
+
+
+def _recent_fails(key, now):
+    return [t for t in _login_fails.get(key, []) if now - t < LOGIN_WINDOW]
+
+
+def login_retry_after(name):
+    """0 if a login attempt is allowed now, else the seconds to wait."""
+    now = time.monotonic()
+    key = _throttle_key(name)
+    with _login_lock:
+        fails = _recent_fails(key, now)
+        _login_fails[key] = fails  # prune stale entries as we go
+        if len(fails) >= LOGIN_MAX_FAILS:
+            return int(LOGIN_WINDOW - (now - fails[0])) + 1
+    return 0
+
+
+def record_login_fail(name):
+    now = time.monotonic()
+    key = _throttle_key(name)
+    with _login_lock:
+        _login_fails[key] = _recent_fails(key, now) + [now]
+
+
+def clear_login_fails(name):
+    with _login_lock:
+        _login_fails.pop(_throttle_key(name), None)
 
 
 def default_wheel_prefs():
@@ -573,29 +657,45 @@ def register():
     code = str(payload.get("code", "")).strip().upper().replace(" ", "")
     if len(name) < 2:
         abort(400, description="pick a name of at least 2 characters")
-    if len(password) < 4:
-        abort(400, description="pick a password of at least 4 characters")
+    if len(password) < MIN_PASSWORD_LEN:
+        abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
     with _lock:
         db = load_db()
         if any(u["name"].lower() == name.lower() for u in db["users"].values()):
             abort(400, description="that name is already taken — log in instead?")
+        first_account = not db["users"]  # the very first account bootstraps the server
+        # A code can be a wheel's share code (join that wheel) or an admin
+        # account-invite (create an account, join nothing). Wheels win the
+        # namespace; invites never collide with a wheel code (see below).
         wheel = None
+        invite = None
         if code:
             wheel = next((w for w in db["wheels"].values() if w["code"] == code), None)
             if wheel is None:
+                invite = db.get("invites", {}).get(code)
+            if wheel is None and invite is None:
                 abort(400, description="that invite link doesn't work (anymore) — "
                                        "ask for a fresh one, or register without it")
+        # Closed registration keeps casual sign-ups out on an internet-facing
+        # server. The first account and anyone holding a valid invite (wheel
+        # or admin) still get through.
+        if not first_account and not settings_view(db)["registration_open"] \
+                and wheel is None and invite is None:
+            abort(403, description="registration is invite-only on this server right now — "
+                                   "ask an admin for an invite link")
         user = {
             "id": "u-" + uuid.uuid4().hex[:10],
             "name": name,
             "salt": secrets.token_hex(16),
             "wheels": [wheel["id"]] if wheel else [],
             "prefs": {},
-            "admin": not db["users"],  # the very first account runs the place
+            "admin": first_account,
             "created": datetime.now(timezone.utc).isoformat(),
         }
         user["password"] = hash_password(password, user["salt"])
         db["users"][user["id"]] = user
+        if invite:
+            db.setdefault("invites", {}).pop(code, None)  # single-use — spent now
         token = start_session(db, user)
         save_db(db)
         me = me_payload(db, user)
@@ -609,11 +709,17 @@ def login():
     payload = request.get_json(force=True, silent=True) or {}
     name = str(payload.get("name", "")).strip()
     password = str(payload.get("password", ""))
+    retry = login_retry_after(name)
+    if retry:
+        abort(429, description="too many attempts on this name — "
+                               f"wait about {max(1, retry // 60)} min and try again")
     with _lock:
         db = load_db()
         user = next((u for u in db["users"].values() if u["name"].lower() == name.lower()), None)
         if not user or not hmac.compare_digest(user["password"], hash_password(password, user["salt"])):
+            record_login_fail(name)
             abort(401, description="wrong name or password")
+        clear_login_fails(name)  # a good login wipes the slate
         token = start_session(db, user)
         save_db(db)
         return jsonify({"token": token, "me": me_payload(db, user)})
@@ -646,6 +752,33 @@ def update_prefs():
         user["prefs"] = clean_prefs(db, user, payload)
         save_db(db)
         return jsonify(user["prefs"])
+
+
+def set_password(user, new_password):
+    """Give the account a fresh salt + hash. A new salt on every change
+    means two identical passwords never share a stored hash."""
+    user["salt"] = secrets.token_hex(16)
+    user["password"] = hash_password(new_password, user["salt"])
+
+
+@app.put("/api/me/password")
+def change_password():
+    """Change your own password. The current one must check out; the new
+    one meets the same floor as registration. Other devices stay logged
+    in — this isn't a 'kick everyone' button, just a password swap."""
+    payload = request.get_json(force=True, silent=True) or {}
+    current = str(payload.get("current", ""))
+    new_password = str(payload.get("new", ""))
+    if len(new_password) < MIN_PASSWORD_LEN:
+        abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        if not hmac.compare_digest(user["password"], hash_password(current, user["salt"])):
+            abort(403, description="that's not your current password")
+        set_password(user, new_password)
+        save_db(db)
+    return jsonify({"changed": True})
 
 
 # ── Push notifications (Web Push / VAPID) ────────────────────────────
@@ -921,6 +1054,10 @@ def cached_busy(url, fresh=False):
                 return entry["busy"]
     busy = None
     try:
+        if not feed_host_is_public(url):
+            # re-checked here (not just at add time) so a host that has since
+            # come to resolve to a private/link-local IP can't be reached
+            raise ValueError("host resolves to a non-public address")
         req = urllib.request.Request(url, headers={"User-Agent": "wheel-of-choice"})
         with urllib.request.urlopen(req, timeout=ICS_TIMEOUT) as resp:  # noqa: S310 (scheme vetted)
             raw = resp.read(ICS_MAX_BYTES + 1)
@@ -952,11 +1089,50 @@ def busy_evenings_for(feeds, fresh=False):
     return busy, readable
 
 
+def _ip_is_private(ip_str):
+    """True for addresses no outbound calendar fetch has any business
+    reaching — loopback, private ranges, link-local (incl. the cloud
+    metadata endpoint 169.254.169.254), reserved and multicast."""
+    try:
+        ip = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # unparseable → treat as unsafe
+    return (ip.is_private or ip.is_loopback or ip.is_link_local
+            or ip.is_reserved or ip.is_multicast or ip.is_unspecified)
+
+
+def is_localhost_dev_feed(url):
+    """The one deliberately-allowed inward feed: plain http on localhost,
+    so the calendar feature stays testable on a dev box."""
+    parsed = urlparse(url)
+    return parsed.scheme == "http" and (parsed.hostname or "").lower() in ("localhost", "127.0.0.1")
+
+
+def feed_host_is_public(url):
+    """Whether this feed URL is safe to fetch: its host must resolve to
+    public address(es) only. Checked at *fetch* time (not just when the
+    feed is added) so a host that later points at a private/link-local IP
+    — the classic SSRF-via-DNS move — still can't be reached. The
+    localhost dev feed is the one intended exception."""
+    if is_localhost_dev_feed(url):
+        return True
+    host = (urlparse(url).hostname or "").lower()
+    if not host:
+        return False
+    try:
+        infos = socket.getaddrinfo(host, None)
+    except OSError:
+        return False  # unresolvable → nothing to fetch anyway
+    ips = {info[4][0] for info in infos}
+    return bool(ips) and all(not _ip_is_private(ip) for ip in ips)
+
+
 def clean_feed_url(url):
     """Normalize + vet a pasted calendar URL. webcal→https; only https
-    (plus http on localhost, so the feature is testable) is allowed. We
-    keep SSRF defences proportionate for a single-household home server:
-    scheme allow-list, size cap, timeout — no DNS-rebinding theatre."""
+    (plus http on localhost, so the feature is testable) is allowed. SSRF
+    defences stay proportionate for a home server: an https-only scheme
+    allow-list, a public-host check (so it can't be aimed at the LAN or
+    the cloud metadata endpoint), a size cap and a timeout."""
     url = url.strip()
     if url.lower().startswith("webcal://"):
         url = "https://" + url[len("webcal://"):]
@@ -964,9 +1140,12 @@ def clean_feed_url(url):
         abort(400, description="paste your calendar's secret iCal address")
     parsed = urlparse(url)
     host = (parsed.hostname or "").lower()
-    if parsed.scheme == "https" or (parsed.scheme == "http" and host in ("localhost", "127.0.0.1")):
-        return url
-    abort(400, description="that needs to be an https:// (or webcal://) calendar address")
+    if not (parsed.scheme == "https" or (parsed.scheme == "http" and host in ("localhost", "127.0.0.1"))):
+        abort(400, description="that needs to be an https:// (or webcal://) calendar address")
+    if not feed_host_is_public(url):
+        abort(400, description="that address points at a private or local network "
+                               "address I won't fetch — use a public calendar URL")
+    return url
 
 
 def feed_summary(feed):
@@ -1372,10 +1551,10 @@ def admin_get_settings():
 
 @app.put("/api/admin/settings")
 def admin_put_settings():
-    """Tune the three poll knobs — the timezone, when an evening starts, and
-    how far ahead a poll may reach. Values are clamped/validated; the
-    calendar cache is cleared so busy hints recompute against the new
-    timezone and window."""
+    """Tune the server settings: the three poll knobs (timezone, when an
+    evening starts, how far ahead a poll may reach) and whether open
+    registration is on. Values are clamped/validated; the calendar cache
+    is cleared so busy hints recompute against the new timezone/window."""
     payload = request.get_json(force=True, silent=True) or {}
     with _lock:
         db = load_db()
@@ -1390,12 +1569,67 @@ def admin_put_settings():
         if "poll_horizon_days" in payload:
             stored["poll_horizon_days"] = clamp_horizon(
                 payload.get("poll_horizon_days"), current["poll_horizon_days"])
+        if "registration_open" in payload:
+            stored["registration_open"] = bool(payload.get("registration_open"))
         save_db(db)
         apply_runtime_settings(db)
         view = settings_view(db)
     with _cal_lock:  # busy-sets were digested against the old timezone/window
         _cal_cache.clear()
     return jsonify(view)
+
+
+# ── Account invites ──────────────────────────────────────────────────
+# When registration is closed, an admin hands out single-use invite codes
+# so specific people can still create an account. They share the code
+# format with wheel codes but live in their own bucket and are minted so
+# they never collide with a wheel's code.
+def invite_view(db):
+    invites = db.get("invites", {}) or {}
+    return sorted(
+        ({"code": inv["code"], "created": inv.get("created"), "by": inv.get("by_name", "")}
+         for inv in invites.values()),
+        key=lambda i: i.get("created") or "", reverse=True,
+    )
+
+
+@app.get("/api/admin/invites")
+def admin_list_invites():
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        return jsonify(invite_view(db))
+
+
+@app.post("/api/admin/invites")
+def admin_create_invite():
+    with _lock:
+        db = load_db()
+        admin = require_admin(db)
+        invites = db.setdefault("invites", {})
+        wheel_codes = {w["code"] for w in db["wheels"].values()}
+        code = new_invite_code()
+        while code in invites or code in wheel_codes:  # keep the namespaces disjoint
+            code = new_invite_code()
+        invites[code] = {
+            "code": code,
+            "created": datetime.now(timezone.utc).isoformat(),
+            "by": admin["id"],
+            "by_name": admin["name"],
+        }
+        save_db(db)
+        return jsonify({"code": code, "invites": invite_view(db)}), 201
+
+
+@app.delete("/api/admin/invites/<code>")
+def admin_revoke_invite(code):
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        if db.setdefault("invites", {}).pop(code, None) is None:
+            abort(404, description="no such invite (already used or revoked?)")
+        save_db(db)
+        return jsonify(invite_view(db))
 
 
 @app.put("/api/admin/users/<user_id>")
@@ -1413,6 +1647,31 @@ def admin_set_admin(user_id):
         target["admin"] = make_admin
         save_db(db)
         return jsonify(admin_user_list(db))
+
+
+@app.put("/api/admin/users/<user_id>/password")
+def admin_reset_password(user_id):
+    """Set a temporary password for a user who's locked out — the only
+    recovery path in an app with no email. It logs that user out of every
+    device (their old sessions die), so they come back in with the new
+    password and can then change it themselves. Never reveals or changes
+    anyone's admin rights; the admin's own token is untouched."""
+    payload = request.get_json(force=True, silent=True) or {}
+    new_password = str(payload.get("new", ""))
+    if len(new_password) < MIN_PASSWORD_LEN:
+        abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        target = db["users"].get(user_id)
+        if target is None:
+            abort(404, description="no such user")
+        set_password(target, new_password)
+        # force the target to log back in everywhere with the new password
+        db["sessions"] = {t: s for t, s in db["sessions"].items() if s["user"] != user_id}
+        clear_login_fails(target["name"])  # don't punish them for the lock-out
+        save_db(db)
+    return jsonify({"reset": True})
 
 
 @app.post("/api/admin/users/<user_id>/unshare")
@@ -1540,6 +1799,19 @@ def version():
         "server_started": SERVER_STARTED,
         "update_pending": UPDATE_FLAG.exists(),
     })
+
+
+@app.get("/api/config")
+def public_config():
+    """The handful of facts the logged-out screen needs before anyone's
+    authenticated — currently just whether open registration is on, so it
+    can show or hide the 'Create account' tab. Nothing sensitive: with no
+    accounts yet the server always allows the first sign-up, so this
+    reports open until that bootstrap account exists."""
+    with _lock:
+        db = load_db()
+        open_reg = settings_view(db)["registration_open"] or not db["users"]
+    return jsonify({"registration_open": bool(open_reg)})
 
 
 # ── Validation ───────────────────────────────────────────────────────

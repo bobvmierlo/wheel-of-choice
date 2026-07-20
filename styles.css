@@ -409,6 +409,16 @@ body {
 .admin-setting-suffix { color: var(--text-dim); font-size: 0.9rem; }
 .admin-setting-hint { grid-column: 1 / -1; color: var(--text-dim); font-size: 0.8rem; line-height: 1.4; }
 .admin-setting-field input[type="text"] { width: 13rem; max-width: 100%; }
+.admin-setting-field input[type="checkbox"] {
+  width: auto;
+  padding: 0;
+  accent-color: var(--accent);
+  transform: scale(1.3);
+  transform-origin: left center;
+  cursor: pointer;
+}
+.reg-toggle { margin-bottom: 0.2rem; }
+.invite-list { margin: 0.4rem 0 0.6rem; }
 
 .update-available {
   font-size: 0.88rem;
@@ -705,3 +715,17 @@ body {
   padding: 0;
 }
 .linklike:hover { color: var(--text); }
+
+/* Honour the OS "reduce motion" preference: near-instant transitions and
+ * animations across the UI. The wheel spin and confetti are toned down in
+ * app.js as well; this covers the smaller hover/press flourishes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
