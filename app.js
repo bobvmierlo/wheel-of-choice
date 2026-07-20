@@ -35,6 +35,11 @@
     '#fb7fb8', '#8aa9ff', '#5eddaf', '#ff9e6d',
   ];
 
+  // Respect the OS "reduce motion" setting: shorten the wheel spin and
+  // skip the confetti burst for anyone who's asked for less animation.
+  const prefersReducedMotion = () =>
+    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
   // key predates the rename to Wheel of Choice — changing it would log
   // every existing browser out for nothing
   const TOKEN_KEY = 'wheel-of-wander-token';
@@ -205,6 +210,7 @@
   const accountName = document.getElementById('account-name');
   const shareBtn = document.getElementById('share-btn');
   const adminBtn = document.getElementById('admin-btn');
+  const passwordBtn = document.getElementById('password-btn');
   const logoutBtn = document.getElementById('logout-btn');
 
   const authForm = document.getElementById('auth-form');
@@ -335,6 +341,7 @@
     adminBtn.hidden = !me.user.admin;
     if (me.user.admin) checkForUpdate(); // light up the 🆕 dot if one's waiting
     notifyBtn.hidden = false;
+    passwordBtn.hidden = false;
     syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
     syncCalendarButton(); // shows 📆 only if the server can read calendars
     const invite = inviteCode;
@@ -458,8 +465,13 @@
       document.querySelectorAll('.auth-tabs .tab').forEach((t) => {
         t.classList.toggle('active', t === tab);
       });
-      authSubmit.textContent = authMode === 'login' ? 'Log in' : 'Create account';
-      authPassword.autocomplete = authMode === 'login' ? 'current-password' : 'new-password';
+      const registering = authMode === 'register';
+      authSubmit.textContent = registering ? 'Create account' : 'Log in';
+      authPassword.autocomplete = registering ? 'new-password' : 'current-password';
+      // Only new passwords must clear the 8-char floor. Login stays lenient
+      // so accounts created under the old 4-char rule can still get in.
+      authPassword.minLength = registering ? 8 : 1;
+      authPassword.placeholder = registering ? 'At least 8 characters' : 'Your password';
       authError.textContent = '';
     });
   });
@@ -1468,6 +1480,50 @@
   calendarBtn.addEventListener('click', () => { calendarModal.showModal(); renderCalendarModal(); });
   closeCalendarBtn.addEventListener('click', () => calendarModal.close());
 
+  // ── Change your own password ─────────────────────────────────────
+  const passwordModal = document.getElementById('password-modal');
+  const closePasswordBtn = document.getElementById('close-password-btn');
+  const passwordForm = document.getElementById('password-form');
+  const passwordCurrent = document.getElementById('password-current');
+  const passwordNew = document.getElementById('password-new');
+  const passwordConfirm = document.getElementById('password-confirm');
+  const passwordSubmit = document.getElementById('password-submit');
+  const passwordState = document.getElementById('password-state');
+  const passwordError = document.getElementById('password-error');
+
+  passwordBtn.addEventListener('click', () => {
+    passwordForm.reset();
+    passwordState.textContent = '';
+    passwordError.textContent = '';
+    passwordModal.showModal();
+    passwordCurrent.focus();
+  });
+  closePasswordBtn.addEventListener('click', () => passwordModal.close());
+
+  passwordForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    passwordError.textContent = '';
+    passwordState.textContent = '';
+    if (passwordNew.value !== passwordConfirm.value) {
+      passwordError.textContent = '⚠️ The two new passwords don\'t match';
+      return;
+    }
+    passwordSubmit.disabled = true;
+    try {
+      await rootApi('/me/password', {
+        method: 'PUT',
+        body: JSON.stringify({ current: passwordCurrent.value, new: passwordNew.value }),
+      });
+      passwordForm.reset();
+      passwordState.textContent = '✅ Password changed';
+      setTimeout(() => { if (passwordModal.open) passwordModal.close(); }, 1200);
+    } catch (err) {
+      passwordError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      passwordSubmit.disabled = false;
+    }
+  });
+
   feedForm.addEventListener('submit', async (e) => {
     e.preventDefault();
     calendarError.textContent = '';
@@ -1664,6 +1720,27 @@
             body: JSON.stringify({ admin: !u.admin }),
           }))
         ));
+        li.append(adminActionBtn('🔑 Reset password',
+          'Set a temporary password and log them out everywhere', async () => {
+            const pw = prompt(`Set a temporary password for ${u.name} (at least 8 characters).\n`
+              + `They'll be logged out on every device and come back in with it — `
+              + `then they can change it themselves.`);
+            if (pw === null) return; // cancelled
+            if (pw.length < 8) {
+              adminError.textContent = '⚠️ That password is too short — at least 8 characters.';
+              return;
+            }
+            adminError.textContent = '';
+            try {
+              await rootApi(`/admin/users/${u.id}/password`, {
+                method: 'PUT',
+                body: JSON.stringify({ new: pw }),
+              });
+              adminError.textContent = `✅ ${u.name}'s password was reset — pass the new one along.`;
+            } catch (err) {
+              adminError.textContent = `⚠️ ${err.message}`;
+            }
+          }));
         if (u.sharing_with.length) {
           li.append(adminActionBtn('Unshare', 'Pull them out of every wheel they share', () => {
             if (!confirm(`Pull ${u.name} out of every wheel they share with ${u.sharing_with.join(', ')}? They keep their account and any wheels of their own.`)) return;
@@ -1968,10 +2045,13 @@
     spinBtn.disabled = true;
     wheelHint.textContent = 'Round and round it goes… 🤞';
 
+    // With reduced motion the wheel settles quickly onto its pick instead
+    // of the long dramatic spin — same landing, far less movement.
+    const reduce = prefersReducedMotion();
     const startRotation = rotation;
-    const extraTurns = 5 + Math.random() * 3;
+    const extraTurns = reduce ? 0 : 5 + Math.random() * 3;
     const targetRotation = startRotation + extraTurns * Math.PI * 2 + Math.random() * Math.PI * 2;
-    const duration = 4400;
+    const duration = reduce ? 700 : 4400;
     const startTime = performance.now();
 
     function frame(now) {
@@ -2300,6 +2380,7 @@
   let confettiRaf = null;
 
   function launchConfetti() {
+    if (prefersReducedMotion()) return;  // no celebratory shower if motion's dialled down
     const W = confettiCanvas.width;
     const H = confettiCanvas.height;
     const pieces = Array.from({ length: 90 }, () => ({

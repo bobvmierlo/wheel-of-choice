@@ -705,3 +705,17 @@ body {
   padding: 0;
 }
 .linklike:hover { color: var(--text); }
+
+/* Honour the OS "reduce motion" preference: near-instant transitions and
+ * animations across the UI. The wheel spin and confetti are toned down in
+ * app.js as well; this covers the smaller hover/press flourishes. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
