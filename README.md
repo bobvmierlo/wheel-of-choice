@@ -122,6 +122,18 @@ python3 server.py
 # then open http://localhost:8000
 ```
 
+### Tests
+
+The API has a [`pytest`](https://pytest.org) suite covering accounts,
+wheel creation and sharing, the round/veto/confirm handshake, database
+migration and the admin guardrails. Each test runs against a throwaway
+data directory, so it never touches your real `db.json`:
+
+```bash
+pip install pytest
+python3 -m pytest
+```
+
 ## Deploying to a Linux server
 
 The repo ships with a tiny [Flask](https://flask.palletsprojects.com)
@@ -403,5 +415,8 @@ sites, blogs, hotel pages, …) via ✏️ edit.
 - The wheel types and the tag/onboarding vocabulary (`budget`,
   `distance`, `vibes`, `seasons`, `party`, home regions, roam ranges)
   are defined at the top of [`server.py`](server.py).
-- Colors and styling live in [`styles.css`](styles.css); all frontend
-  logic is in [`app.js`](app.js).
+- Colors and styling live in [`styles.css`](styles.css); the frontend
+  logic is in [`app.js`](app.js) (loaded as an ES module), with the
+  shared constant tables in [`constants.js`](constants.js) and the
+  pure, state-free helpers in [`utils.js`](utils.js). No build step —
+  the browser loads the modules directly.

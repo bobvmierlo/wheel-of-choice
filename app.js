@@ -8,41 +8,14 @@
  * wheel, so people sharing a wheel each keep their own filters. Only
  * the login token is kept in this browser.
  */
+import {
+  VIBE_LABELS, BUDGET_LABELS, DISTANCE_LABELS, MULTI_FILTERS,
+  WHEEL_TYPE_META, SEGMENT_COLORS, TOKEN_KEY,
+} from './constants.js';
+import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './utils.js';
+
 (function () {
   'use strict';
-
-  const VIBE_LABELS = {
-    nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food',
-    beach: '🏖️ beach', nightlife: '🌃 nightlife', adventure: '🧗 adventure',
-    wellness: '💆 wellness', winter: '⛷️ snow',
-  };
-  const BUDGET_LABELS = { low: '💶 low budget', mid: '💶💶 mid budget', high: '💶💶💶 high budget' };
-  const DISTANCE_LABELS = { regional: '🚗 regional', europe: '✈️ Europe', longhaul: '🌏 long-haul' };
-  // Stars are per person (starred_by). One star doubles the wheel
-  // segment; starred by two people triples it. Entries from before
-  // per-person stars only carry the shared `favorite` flag — worth one.
-  const MULTI_FILTERS = ['budget', 'distance', 'vibe', 'season']; // 'party' stays single-choice
-
-  const WHEEL_TYPE_META = {
-    holidays: { icon: '🌍', kicker: 'Your next holiday is…', noun: 'destination' },
-    citytrips: { icon: '🏙️', kicker: 'Your next city trip is…', noun: 'destination' },
-    restaurants: { icon: '🍽️', kicker: 'Tonight you\'re eating at…', noun: 'restaurant' },
-  };
-
-  const SEGMENT_COLORS = [
-    '#ff5e7e', '#ffb84d', '#4dabff', '#6ee7a8',
-    '#c084fc', '#f97362', '#38d0e0', '#facc15',
-    '#fb7fb8', '#8aa9ff', '#5eddaf', '#ff9e6d',
-  ];
-
-  // Respect the OS "reduce motion" setting: shorten the wheel spin and
-  // skip the confetti burst for anyone who's asked for less animation.
-  const prefersReducedMotion = () =>
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches;
-
-  // key predates the rename to Wheel of Choice — changing it would log
-  // every existing browser out for nothing
-  const TOKEN_KEY = 'wheel-of-wander-token';
 
   // ── State ─────────────────────────────────────────────────────────
   let wheelId = ''; // current wheel id — resolved from /me + the URL hash
@@ -1035,11 +1008,6 @@
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   }
 
-  function prettyDate(iso) {
-    const [y, m, d] = iso.split('-').map(Number);
-    return new Date(y, m - 1, d).toLocaleDateString(undefined, { weekday: 'short', day: 'numeric', month: 'short' });
-  }
-
   function currentPollEntry() {
     return state.history.find((e) => e.id === pollEntryId) || null;
   }
@@ -1150,11 +1118,6 @@
   }
 
   // 17 → "5pm", 0 → "midnight", 12 → "noon" — a friendly evening-start label
-  function fmtHour(h) {
-    if (h === 0) return 'midnight';
-    if (h === 12) return 'noon';
-    return `${((h + 11) % 12) + 1}${h < 12 ? 'am' : 'pm'}`;
-  }
 
   function setPollLegend(el) {
     if (pollLinked) {
@@ -1770,13 +1733,6 @@
     const res = await fetch('/api/version');
     if (!res.ok) throw new Error(`Server said ${res.status}`);
     return res.json();
-  }
-
-  function formatDateTime(iso) {
-    const d = new Date(iso);
-    return Number.isNaN(d.getTime())
-      ? iso
-      : d.toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
   }
 
   function renderVersion() {
