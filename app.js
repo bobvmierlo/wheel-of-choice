@@ -344,7 +344,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function applyMe() {
     accountName.textContent = `👤 ${me.user.name}`;
-    renderInvites(); // wheels other people shared with me — accept/dismiss
+    renderWheelInvites(); // wheels other people shared with me — accept/dismiss
     adminBtn.hidden = !me.user.admin;
     if (me.user.admin) checkForUpdate(); // light up the 🆕 dot if one's waiting
     notifyBtn.hidden = false;
@@ -771,7 +771,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   // ── Incoming invitations (someone shared a wheel with me) ─────────
   // Rendered from me.invites into a banner that sits above every view, so
   // it's reachable whether the person has wheels of their own or not.
-  function renderInvites() {
+  // (Named distinctly from the admin panel's renderInvites, which handles
+  // account-invite links — same scope, so the names must not collide.)
+  function renderWheelInvites() {
     const invites = (me && me.invites) || [];
     invitesBanner.innerHTML = '';
     if (!token || !invites.length) {
