@@ -279,6 +279,7 @@
     <p class="result-flag" id="result-flag"></p>
     <h2 class="result-name" id="result-name"></h2>
     <p class="result-tags" id="result-tags"></p>
+    <p class="info-location" id="result-location" hidden></p>
     <p class="info-notes result-notes" id="result-notes" hidden></p>
     <ul class="link-list result-links" id="result-links"></ul>
     <div class="modal-actions">
@@ -297,6 +298,7 @@
     <p class="result-flag info-flag" id="info-flag"></p>
     <h2 class="result-name" id="info-name"></h2>
     <p class="result-tags" id="info-tags"></p>
+    <p class="info-location" id="info-location" hidden></p>
     <p class="info-notes" id="info-notes" hidden></p>
     <h3>🔗 Read more</h3>
     <ul class="link-list" id="info-links"></ul>
@@ -579,6 +581,12 @@
           <option value="europe" selected>Europe</option>
           <option value="longhaul">Long-haul</option>
         </select>
+      </div>
+      <div class="location-row food-only">
+        <input type="text" id="add-location" maxlength="200"
+               placeholder="Address — paste it from Google Maps">
+        <button type="button" class="btn btn-ghost btn-small" id="add-location-search"
+                title="Search Google Maps for this restaurant — copy the address back here">🔍 Maps</button>
       </div>
       <div class="add-checks travel-only" id="add-vibes">
         <span class="checks-label">Vibes:</span>
