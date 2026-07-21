@@ -386,6 +386,12 @@
     </div>
     <p class="manage-hint" id="poll-sub"></p>
 
+    <!-- shown while the (possibly slow) live calendar pull is in flight -->
+    <div class="poll-loading" id="poll-loading" role="status" hidden>
+      <span class="poll-spinner" aria-hidden="true"></span>
+      <span>📆 Checking calendars for busy evenings…</span>
+    </div>
+
     <!-- propose mode: pick candidate evenings from a grid -->
     <div id="poll-propose" hidden>
       <div class="cal-legend" id="poll-legend"></div>

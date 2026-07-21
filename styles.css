@@ -603,6 +603,25 @@ body {
 .info-poll-actions { display: flex; flex-wrap: wrap; gap: 0.5rem; width: 100%; }
 .poll-locked { color: var(--text); font-weight: 600; }
 
+.poll-loading {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  padding: 1.2rem 0;
+}
+.poll-spinner {
+  width: 1.1rem;
+  height: 1.1rem;
+  flex: none;
+  border: 2px solid var(--panel-border);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: poll-spin 0.8s linear infinite;
+}
+@keyframes poll-spin { to { transform: rotate(360deg); } }
+
 .cal-legend { color: var(--text-dim); font-size: 0.8rem; margin: 0.2rem 0 0.7rem; line-height: 1.5; }
 .cal-dot { display: inline-block; width: 0.6em; height: 0.6em; border-radius: 50%; margin: 0 0.15em 0 0.5em; vertical-align: baseline; }
 .cal-dot.busy { background: var(--accent); }

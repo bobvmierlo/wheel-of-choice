@@ -983,6 +983,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const closePollBtn = document.getElementById('close-poll-btn');
   const pollTitle = document.getElementById('poll-title');
   const pollSub = document.getElementById('poll-sub');
+  const pollLoading = document.getElementById('poll-loading');
   const pollPropose = document.getElementById('poll-propose');
   const pollVoteView = document.getElementById('poll-vote');
   const pollLegend = document.getElementById('poll-legend');
@@ -1140,13 +1141,25 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   async function openPollModal(entry, mode) {
     pollEntryId = entry.id;
     pollError.textContent = '';
+    // Open the modal right away with a loading note — polling live ICS
+    // feeds can take a few seconds and a blank wait reads as a hang.
+    const poll = entry.poll;
+    pollTitle.textContent = mode !== 'propose' && poll
+      ? (poll.status === 'locked' ? "🗓️ It's a date" : '🗳️ When can everyone make it?')
+      : '🗳️ Find an evening';
+    pollSub.textContent = `${entry.flag} ${entry.name}`;
+    pollPropose.hidden = true;
+    pollVoteView.hidden = true;
+    pollLoading.hidden = false;
+    if (!pollModal.open) pollModal.showModal();
     // starting a poll → pull the freshest calendar; viewing an existing one
     // rides the cache (fast, and busy hints are only ever hints there)
     await loadPollAvailability(mode === 'propose');
+    pollLoading.hidden = true;
+    if (!pollModal.open) return;  // closed while the calendar was fetching
     const latest = currentPollEntry() || entry;
     if (mode === 'propose' && !latest.poll) showPollPropose(latest);
     else showPollVote(latest);
-    if (!pollModal.open) pollModal.showModal();
   }
 
   function monthStart(d) {
