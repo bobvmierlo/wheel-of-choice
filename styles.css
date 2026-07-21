@@ -841,6 +841,55 @@ body {
 /* Honour the OS "reduce motion" preference: near-instant transitions and
  * animations across the UI. The wheel spin and confetti are toned down in
  * app.js as well; this covers the smaller hover/press flourishes. */
+/* ── "Add to home screen" toast (mobile web only) ──────────────────── */
+.pwa-toast {
+  position: fixed;
+  left: 50%;
+  bottom: max(1rem, env(safe-area-inset-bottom));
+  transform: translateX(-50%);
+  z-index: 200;
+  width: min(440px, calc(100vw - 1.6rem));
+  background: linear-gradient(160deg, rgba(59, 29, 94, 0.98), rgba(27, 16, 53, 0.98));
+  border: 1px solid var(--panel-border);
+  border-radius: 16px;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(10px);
+  padding: 1rem 1.1rem;
+  animation: pwa-toast-in 0.35s ease both;
+}
+@keyframes pwa-toast-in {
+  from { opacity: 0; transform: translate(-50%, 1.2rem); }
+  to   { opacity: 1; transform: translate(-50%, 0); }
+}
+.pwa-toast-close {
+  position: absolute;
+  top: 0.5rem;
+  right: 0.6rem;
+  background: none;
+  border: none;
+  color: var(--text-dim);
+  font-size: 0.9rem;
+  line-height: 1;
+  cursor: pointer;
+  padding: 0.25rem;
+}
+.pwa-toast-close:hover { color: var(--text); }
+.pwa-toast-text { font-size: 0.9rem; line-height: 1.5; margin: 0 1.2rem 0.2rem 0; }
+.pwa-toast-steps {
+  margin: 0.5rem 0 0.2rem;
+  padding-left: 1.2rem;
+  color: var(--text-dim);
+  font-size: 0.85rem;
+  line-height: 1.6;
+}
+.pwa-toast-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.8rem;
+}
+.pwa-toast-error { color: var(--accent); font-size: 0.82rem; margin: 0.6rem 0 0; }
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

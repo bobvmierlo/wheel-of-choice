@@ -351,6 +351,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     passwordBtn.hidden = false;
     syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
     syncCalendarButton(); // shows 📆 only if the server can read calendars
+    maybePromotePwa(); // nudge phone-web users onto the Home Screen (once)
     const invite = inviteCode;
     inviteCode = '';
     inviteBanner.hidden = true;
@@ -1016,6 +1017,93 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     });
   }
 
+  // ── Install / notifications nudge ─────────────────────────────────
+  // Two flavours of the same toast, shown once per browser until
+  // dismissed:
+  //   • phone/tablet web, not yet installed → add to the Home Screen,
+  //     which is what unlocks push (iOS especially) and the calendar.
+  //     Chrome/Android hands us a real install prompt via
+  //     beforeinstallprompt; iOS has none, so we spell out the steps.
+  //   • desktop, push available but not yet on → turn notifications on
+  //     right here, no install needed.
+  const PWA_TOAST_DISMISSED_KEY = 'wheel-pwa-toast-dismissed';
+  const isMobile = isIOS || /Android|Mobile/i.test(navigator.userAgent);
+  const pwaToast = document.getElementById('pwa-toast');
+  const pwaInstallBody = document.getElementById('pwa-toast-install-body');
+  const pwaNotifyBody = document.getElementById('pwa-toast-notify-body');
+  const pwaToastSteps = document.getElementById('pwa-toast-steps');
+  const pwaToastInstall = document.getElementById('pwa-toast-install');
+  const pwaToastNotify = document.getElementById('pwa-toast-notify');
+  const pwaNotifyError = document.getElementById('pwa-toast-notify-error');
+  let deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    // Hold onto it so our own button can trigger the native prompt.
+    event.preventDefault();
+    deferredInstallPrompt = event;
+  });
+
+  function dismissPwaToast() {
+    pwaToast.hidden = true;
+    try { localStorage.setItem(PWA_TOAST_DISMISSED_KEY, '1'); } catch { /* private mode — fine */ }
+  }
+
+  // Installed (or already added to the Home Screen): never nag again.
+  window.addEventListener('appinstalled', dismissPwaToast);
+
+  document.getElementById('pwa-toast-close').addEventListener('click', dismissPwaToast);
+  document.querySelectorAll('.pwa-toast-dismiss').forEach((b) => b.addEventListener('click', dismissPwaToast));
+
+  pwaToastInstall.addEventListener('click', async () => {
+    if (deferredInstallPrompt) {
+      // Android/Chrome: fire the browser's own install prompt.
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice.catch(() => ({ outcome: 'dismissed' }));
+      deferredInstallPrompt = null;
+      if (outcome === 'accepted') dismissPwaToast();
+      return;
+    }
+    // iOS (and anything without the native prompt): reveal the manual steps.
+    pwaToastSteps.hidden = false;
+    pwaToastInstall.hidden = true;
+  });
+
+  pwaToastNotify.addEventListener('click', async () => {
+    pwaNotifyError.hidden = true;
+    pwaToastNotify.disabled = true;
+    try {
+      await enablePush(); // native permission prompt fires from this click
+      dismissPwaToast();
+    } catch (err) {
+      console.error(err);
+      pwaNotifyError.textContent = `⚠️ ${err.message}`;
+      pwaNotifyError.hidden = false;
+    } finally {
+      pwaToastNotify.disabled = false;
+    }
+  });
+
+  async function maybePromotePwa() {
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(PWA_TOAST_DISMISSED_KEY) === '1'; } catch { /* ignore */ }
+    if (dismissed) return;
+    if (isMobile) {
+      if (isStandalone) return;         // already installed — nothing to nudge
+      pwaInstallBody.hidden = false;
+      pwaToast.hidden = false;
+      return;
+    }
+    // Desktop: push works straight in the browser. Only nudge when it's
+    // actually available and the user hasn't decided yet — a denied
+    // permission can't be re-prompted, and no point if the server can't send.
+    if (!pushSupported() || Notification.permission !== 'default') return;
+    try {
+      if (!(await rootApi('/push/status')).enabled) return;
+    } catch { return; }
+    pwaNotifyBody.hidden = false;
+    pwaToast.hidden = false;
+  }
+
   // Land on the wheel (and dinner) a notification points at, from a URL
   // like "/?dinner=<id>#<wheel-id>" — used both on cold start and when the
   // running app is refocused by a notification tap.
@@ -1105,26 +1193,32 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   });
   closeNotifyBtn.addEventListener('click', () => notifyModal.close());
 
+  // Turn push on for this device: check the server can send, get the
+  // browser's permission (must be inside a user gesture), subscribe, and
+  // register that subscription. Throws with a human message on any snag,
+  // so callers can surface it. Shared by the modal and the desktop toast.
+  async function enablePush() {
+    const server = await rootApi('/push/status');
+    if (!server.enabled) throw new Error('the server has push notifications disabled');
+    if (await Notification.requestPermission() !== 'granted') {
+      throw new Error("permission wasn't granted");
+    }
+    const reg = await navigator.serviceWorker.ready;
+    let sub = await reg.pushManager.getSubscription();
+    if (!sub) {
+      sub = await reg.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey: urlBase64ToUint8Array(server.public_key),
+      });
+    }
+    await rootApi('/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+  }
+
   notifyEnable.addEventListener('click', async () => {
     notifyError.textContent = '';
     notifyEnable.disabled = true;
     try {
-      const server = await rootApi('/push/status');
-      if (!server.enabled) throw new Error('the server has push notifications disabled');
-      // must happen in this click handler — browsers only show the
-      // permission prompt straight from a user gesture
-      if (await Notification.requestPermission() !== 'granted') {
-        throw new Error("permission wasn't granted");
-      }
-      const reg = await navigator.serviceWorker.ready;
-      let sub = await reg.pushManager.getSubscription();
-      if (!sub) {
-        sub = await reg.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey: urlBase64ToUint8Array(server.public_key),
-        });
-      }
-      await rootApi('/push/subscribe', { method: 'POST', body: JSON.stringify(sub.toJSON()) });
+      await enablePush();
     } catch (err) {
       console.error(err);
       notifyError.textContent = `⚠️ ${err.message}`;

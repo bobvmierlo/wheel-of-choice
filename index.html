@@ -673,6 +673,41 @@
     <ul id="dest-list" class="dest-list"></ul>
   </dialog>
 
+  <!-- ── Install / notifications nudge ────────────────────────────────
+       Two flavours, one toast (see maybePromotePwa in app.js):
+       • phone/tablet web, not yet installed → add it to the Home Screen,
+         which is what unlocks push notifications (iOS needs it) and keeps
+         the calendar link a tap away;
+       • desktop → turn on push notifications right here in the browser. -->
+  <div class="pwa-toast" id="pwa-toast" role="status" aria-live="polite" hidden>
+    <button type="button" class="pwa-toast-close" id="pwa-toast-close" aria-label="Dismiss">✕</button>
+
+    <div class="pwa-toast-body" id="pwa-toast-install-body" hidden>
+      <p class="pwa-toast-text">📲 <strong>Add Wheel of Choice to your home screen.</strong>
+        It runs like a real app and unlocks 🔔 push notifications and 📆 calendar links.</p>
+      <ol class="pwa-toast-steps" id="pwa-toast-steps" hidden>
+        <li>Tap the <strong>Share</strong> button</li>
+        <li>Choose <strong>Add to Home Screen</strong></li>
+        <li>Open 🎡 from your Home Screen</li>
+      </ol>
+      <div class="pwa-toast-actions">
+        <button type="button" class="btn btn-primary btn-small" id="pwa-toast-install">📲 Add to Home Screen</button>
+        <button type="button" class="btn btn-ghost btn-small pwa-toast-dismiss">Not now</button>
+      </div>
+    </div>
+
+    <div class="pwa-toast-body" id="pwa-toast-notify-body" hidden>
+      <p class="pwa-toast-text">🔔 <strong>Turn on notifications.</strong>
+        Get a ping when someone spins and waits for your thumbs-up, a pick gets
+        vetoed, or the decision is final — even with the tab closed.</p>
+      <p class="pwa-toast-error" id="pwa-toast-notify-error" role="alert" hidden></p>
+      <div class="pwa-toast-actions">
+        <button type="button" class="btn btn-primary btn-small" id="pwa-toast-notify">🔔 Turn on notifications</button>
+        <button type="button" class="btn btn-ghost btn-small pwa-toast-dismiss">Not now</button>
+      </div>
+    </div>
+  </div>
+
   <footer class="site-footer">
     <span class="footer-version" id="footer-version"></span>
   </footer>
