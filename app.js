@@ -236,6 +236,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const resultName = document.getElementById('result-name');
   const resultTags = document.getElementById('result-tags');
   const resultNotes = document.getElementById('result-notes');
+  const resultLocation = document.getElementById('result-location');
   const resultLinks = document.getElementById('result-links');
   const acceptBtn = document.getElementById('accept-btn');
   const vetoBtn = document.getElementById('veto-btn');
@@ -264,6 +265,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const infoName = document.getElementById('info-name');
   const infoTags = document.getElementById('info-tags');
   const infoNotes = document.getElementById('info-notes');
+  const infoLocation = document.getElementById('info-location');
   const infoLinks = document.getElementById('info-links');
   const infoPlan = document.getElementById('info-plan');
   const infoStatus = document.getElementById('info-status');
@@ -432,6 +434,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     vetoBtn.hidden = !travel;
     vetoNote.hidden = !travel;
     document.querySelectorAll('#manage-modal .travel-only').forEach((el) => { el.hidden = !travel; });
+    document.querySelectorAll('#manage-modal .food-only').forEach((el) => { el.hidden = travel; });
     addNameInput.placeholder = travel ? 'Destination name' : 'Restaurant name';
     addFlagInput.placeholder = travel ? 'Emoji, e.g. 🏝️' : 'Emoji, e.g. 🍕';
   }
@@ -983,6 +986,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const closePollBtn = document.getElementById('close-poll-btn');
   const pollTitle = document.getElementById('poll-title');
   const pollSub = document.getElementById('poll-sub');
+  const pollLoading = document.getElementById('poll-loading');
   const pollPropose = document.getElementById('poll-propose');
   const pollVoteView = document.getElementById('poll-vote');
   const pollLegend = document.getElementById('poll-legend');
@@ -1029,20 +1033,31 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     return b;
   }
 
+  // A restaurant's calendar spot: its address when one is set (with the
+  // name kept in front so the entry stays recognisable), else the name.
+  function calendarSpot(name, location) {
+    return location ? `${name}, ${location}` : name;
+  }
+
   // Add-to-calendar without any API: a floating-time VEVENT the device
   // reads in its own zone (right for a dinner), and a Google template URL.
-  function icsForPick(name, dateStr) {
+  function icsEscape(s) {
+    return s.replace(/\\/g, '\\\\').replace(/;/g, '\\;').replace(/,/g, '\\,').replace(/\n/g, '\\n');
+  }
+
+  function icsForPick(name, dateStr, location) {
     const day = dateStr.replace(/-/g, '');
     const uid = `wheel-${dateStr}-${Math.random().toString(36).slice(2)}@wheel-of-choice`;
     return [
       'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wheel of Choice//EN', 'BEGIN:VEVENT',
       `UID:${uid}`, `DTSTART:${day}T190000`, `DTEND:${day}T210000`,
-      `SUMMARY:🍽️ ${name}`, `LOCATION:${name}`, 'END:VEVENT', 'END:VCALENDAR',
+      `SUMMARY:${icsEscape('🍽️ ' + name)}`, `LOCATION:${icsEscape(calendarSpot(name, location))}`,
+      'END:VEVENT', 'END:VCALENDAR',
     ].join('\r\n');
   }
 
-  function downloadIcs(name, dateStr) {
-    const blob = new Blob([icsForPick(name, dateStr)], { type: 'text/calendar' });
+  function downloadIcs(name, dateStr, location) {
+    const blob = new Blob([icsForPick(name, dateStr, location)], { type: 'text/calendar' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
@@ -1053,12 +1068,13 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     setTimeout(() => URL.revokeObjectURL(url), 1000);
   }
 
-  function googleCalUrl(name, dateStr) {
+  function googleCalUrl(name, dateStr, location) {
     const day = dateStr.replace(/-/g, '');
     const dates = `${day}T190000/${day}T210000`;  // leave the slash literal — Google wants it raw
     return 'https://calendar.google.com/calendar/render?action=TEMPLATE'
       + `&text=${encodeURIComponent('🍽️ ' + name)}&dates=${dates}`
-      + `&details=${encodeURIComponent('Locked in with Wheel of Choice')}`;
+      + `&details=${encodeURIComponent('Locked in with Wheel of Choice')}`
+      + `&location=${encodeURIComponent(calendarSpot(name, location))}`;
   }
 
   // ── Info-modal poll section ───────────────────────────────────────
@@ -1078,10 +1094,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       infoPollActions.append(b);
     } else if (poll.status === 'locked') {
       infoPollSummary.textContent = `🗓️ ${prettyDate(poll.locked_date)} — it's a date!`;
-      ghostBtn(infoPollActions, '⬇️ Add to calendar (.ics)', () => downloadIcs(entry.name, poll.locked_date));
+      // the entry only carries name + flag; the address lives on the
+      // destination (gone if it was deleted since — the name still works)
+      const dest = state.destinations.find((x) => x.id === entry.dest_id);
+      const loc = (dest && dest.location) || '';
+      ghostBtn(infoPollActions, '⬇️ Add to calendar (.ics)', () => downloadIcs(entry.name, poll.locked_date, loc));
       const g = document.createElement('a');
       g.className = 'btn btn-ghost btn-small';
-      g.href = googleCalUrl(entry.name, poll.locked_date);
+      g.href = googleCalUrl(entry.name, poll.locked_date, loc);
       g.target = '_blank';
       g.rel = 'noopener noreferrer';
       g.textContent = '📆 Google Calendar';
@@ -1140,13 +1160,25 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   async function openPollModal(entry, mode) {
     pollEntryId = entry.id;
     pollError.textContent = '';
+    // Open the modal right away with a loading note — polling live ICS
+    // feeds can take a few seconds and a blank wait reads as a hang.
+    const poll = entry.poll;
+    pollTitle.textContent = mode !== 'propose' && poll
+      ? (poll.status === 'locked' ? "🗓️ It's a date" : '🗳️ When can everyone make it?')
+      : '🗳️ Find an evening';
+    pollSub.textContent = `${entry.flag} ${entry.name}`;
+    pollPropose.hidden = true;
+    pollVoteView.hidden = true;
+    pollLoading.hidden = false;
+    if (!pollModal.open) pollModal.showModal();
     // starting a poll → pull the freshest calendar; viewing an existing one
     // rides the cache (fast, and busy hints are only ever hints there)
     await loadPollAvailability(mode === 'propose');
+    pollLoading.hidden = true;
+    if (!pollModal.open) return;  // closed while the calendar was fetching
     const latest = currentPollEntry() || entry;
     if (mode === 'propose' && !latest.poll) showPollPropose(latest);
     else showPollVote(latest);
-    if (!pollModal.open) pollModal.showModal();
   }
 
   function monthStart(d) {
@@ -2161,19 +2193,37 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     }
   }
 
+  function mapsSearchUrl(name, location) {
+    return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(calendarSpot(name, location))}`;
+  }
+
   // Booking-search links built from the name — the tabs you actually
   // open once a pick is made. Zero data to maintain. Restaurants get a
-  // maps search instead of flights.
-  function planLinks(name) {
+  // maps search instead of flights, sharpened by the address if one is set.
+  function planLinks(name, location) {
     if (!isTravelWheel()) {
       return [
-        { label: '📍 Find it on Maps', url: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(name)}` },
+        { label: '📍 Find it on Maps', url: mapsSearchUrl(name, location) },
       ];
     }
     return [
       { label: '✈️ Flights', url: `https://www.google.com/travel/flights?q=${encodeURIComponent(`flights to ${name}`)}` },
       { label: '🛏️ Stays', url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(name)}` },
     ];
+  }
+
+  // The restaurant's address as a tappable maps link, or nothing.
+  function setLocationLine(el, d) {
+    const loc = (d && !isTravelWheel() && d.location) || '';
+    el.hidden = !loc;
+    el.innerHTML = '';
+    if (!loc) return;
+    const a = document.createElement('a');
+    a.href = mapsSearchUrl(d.name, loc);
+    a.target = '_blank';
+    a.rel = 'noopener noreferrer';
+    a.textContent = `📍 ${loc}`;
+    el.append(a);
   }
 
   // The info view: opened from a spin history entry (with trip status
@@ -2186,11 +2236,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     infoFlag.textContent = d ? d.flag : historyItem.flag;
     infoName.textContent = name;
     infoTags.textContent = d ? describe(d) : 'No longer on this wheel';
+    setLocationLine(infoLocation, d);
     const notes = d && d.notes;
     infoNotes.hidden = !notes;
     infoNotes.textContent = notes || '';
     renderLinkList(infoLinks, d ? destLinks(d) : fallbackLinks(name));
-    renderLinkList(infoPlan, planLinks(name));
+    renderLinkList(infoPlan, planLinks(name, d && d.location));
     infoStatus.hidden = !infoEntry || !isTravelWheel();
     if (infoEntry && isTravelWheel()) syncStatusControls();
     renderInfoPoll();  // restaurant history entries get the date-poll section
@@ -2277,9 +2328,10 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     resultFlag.textContent = destination.flag;
     resultName.textContent = destination.name;
     resultTags.textContent = describe(destination);
+    setLocationLine(resultLocation, destination);
     resultNotes.hidden = !destination.notes;
     resultNotes.textContent = destination.notes || '';
-    renderLinkList(resultLinks, [...destLinks(destination), ...planLinks(destination.name)]);
+    renderLinkList(resultLinks, [...destLinks(destination), ...planLinks(destination.name, destination.location)]);
     if (isTravelWheel()) {
       vetoBtn.disabled = state.round.my_veto_used;
       vetoNote.textContent = state.round.my_veto_used
@@ -2637,6 +2689,17 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     });
   }
 
+  // Location (restaurant wheels): free-text address plus a Google Maps
+  // search shortcut — look the place up, copy its address back here.
+  const addLocation = document.getElementById('add-location');
+  const addLocationSearch = document.getElementById('add-location-search');
+
+  addLocationSearch.addEventListener('click', () => {
+    const name = addNameInput.value.trim();
+    if (!name) { addNameInput.focus(); return; }
+    window.open(mapsSearchUrl(name, addLocation.value.trim()), '_blank', 'noopener');
+  });
+
   // Links editor: a row of label + URL inputs per link
   const addNotes = document.getElementById('add-notes');
   const linkRows = document.getElementById('link-rows');
@@ -2693,6 +2756,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       setCheckedValues('add-vibes', d.vibes);
       setCheckedValues('add-seasons', d.seasons);
       setCheckedValues('add-party', d.party);
+    } else {
+      addLocation.value = d.location || '';
     }
     addNotes.value = d.notes || '';
     linkRows.innerHTML = '';
@@ -2728,6 +2793,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       payload.vibes = checkedValues('add-vibes');
       payload.seasons = checkedValues('add-seasons');
       payload.party = checkedValues('add-party');
+    } else {
+      payload.location = addLocation.value.trim();
     }
     try {
       if (state.editingId) {

@@ -849,14 +849,17 @@ def store_subscription(db, user, sub):
     user["push_subs"] = subs[-MAX_PUSH_SUBS:]
 
 
-def push_to_users(users, title, body, wheel, tag=None):
+def push_to_users(users, title, body, wheel, tag=None, gcal_url=None):
     """Queue one notification to every device of `users`. Delivery runs
     on a background thread: a round-trip to Apple's or Google's relay
     can take seconds, and the member who spun is still waiting for
     their HTTP response. Notifications sharing a tag replace each other
     on the device; the default groups per wheel, so round events
     coalesce — pass a distinct tag for news that shouldn't overwrite an
-    actionable alert (like a pick waiting for a thumbs-up)."""
+    actionable alert (like a pick waiting for a thumbs-up). `gcal_url`
+    rides along for the service worker to offer as an 'Add to calendar'
+    action button (platforms without action support just get the plain
+    notification)."""
     if webpush is None or vapid_public_key() is None:
         return  # the call also guarantees the key file exists before delivery reads it
     targets = [
@@ -865,12 +868,15 @@ def push_to_users(users, title, body, wheel, tag=None):
     ]
     if not targets:
         return
-    payload = json.dumps({
+    data = {
         "title": title,
         "body": body,
         "tag": tag or wheel["id"],
         "url": f"/#{wheel['id']}",
-    }, ensure_ascii=False)
+    }
+    if gcal_url:
+        data["gcal_url"] = gcal_url
+    payload = json.dumps(data, ensure_ascii=False)
     threading.Thread(target=_deliver_pushes, args=(targets, payload), daemon=True).start()
 
 
@@ -1834,7 +1840,7 @@ def clean_links(values, fallback):
 def clean_destination(payload, existing=None, travel=True):
     """Normalise and validate a destination payload; raises ValueError.
     Restaurant entries skip the travel-only fields — they're just a
-    name, an emoji, notes and links."""
+    name, an emoji, a location, notes and links."""
     base = existing or {}
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
@@ -1857,6 +1863,9 @@ def clean_destination(payload, existing=None, travel=True):
         "links": clean_links(payload.get("links", base.get("links", [])), base.get("links", [])),
     }
     if not travel:
+        # the restaurant's address — free text, usually pasted from Google
+        # Maps; it rides into the calendar event once a date locks
+        dest["location"] = str(payload.get("location", base.get("location", ""))).strip()[:200]
         return dest
 
     def subset(key, allowed, fallback):
@@ -2436,6 +2445,21 @@ def vote_poll(wheel_id, entry_id):
         return jsonify({"history": history_view(db, wheel, user)})
 
 
+def dinner_gcal_url(name, location, date_str):
+    """A Google Calendar 'add event' template for a locked dinner —
+    mirrors the frontend's googleCalUrl (19:00–21:00, floating local
+    time) so the in-app button and the push action land the same event."""
+    day = date_str.replace("-", "")
+    spot = f"{name}, {location}" if location else name
+    return (
+        "https://calendar.google.com/calendar/render?action=TEMPLATE"
+        f"&text={quote('🍽️ ' + name)}"
+        f"&dates={day}T190000/{day}T210000"
+        f"&details={quote('Locked in with Wheel of Choice')}"
+        f"&location={quote(spot)}"
+    )
+
+
 @app.post("/api/wheels/<wheel_id>/history/<entry_id>/poll/lock")
 def lock_poll(wheel_id, entry_id):
     date_str = str((request.get_json(force=True, silent=True) or {}).get("date", ""))
@@ -2461,12 +2485,17 @@ def lock_poll(wheel_id, entry_id):
         poll["locked_by"] = user["id"]
         entry["trip_date"] = date_str  # reuse the existing field
         save_db(db)
+        # the address lives on the destination (may be gone if deleted since)
+        dest = next(
+            (d for d in wheel["destinations"] if d["id"] == entry.get("dest_id")), None
+        )
         push_to_users(
             [u for u in wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
             f"🗓️ {pretty_date(date_str)} it is — dinner at {entry['name']}!",
             f"{user['name']} locked it in on {wheel['name']} — pop it in your calendar 📅",
             wheel,
             tag=f"{wheel['id']}-poll-{entry_id}",
+            gcal_url=dinner_gcal_url(entry["name"], (dest or {}).get("location", ""), date_str),
         )
         return jsonify({"history": history_view(db, wheel, user)})
 
