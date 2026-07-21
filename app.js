@@ -240,6 +240,13 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const shareMembers = document.getElementById('share-members');
   const shareError = document.getElementById('share-error');
   const leaveBtn = document.getElementById('leave-btn');
+  const sharePeople = document.getElementById('share-people');
+  const sharePeopleList = document.getElementById('share-people-list');
+  const sharePeopleEmpty = document.getElementById('share-people-empty');
+  const shareInviteBtn = document.getElementById('share-invite-btn');
+  const sharePending = document.getElementById('share-pending');
+  const invitesBanner = document.getElementById('invites-banner');
+  const selectedInvitees = new Set();
 
   const canvas = document.getElementById('wheel');
   const ctx = canvas.getContext('2d');
@@ -337,6 +344,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function applyMe() {
     accountName.textContent = `👤 ${me.user.name}`;
+    renderInvites(); // wheels other people shared with me — accept/dismiss
     adminBtn.hidden = !me.user.admin;
     if (me.user.admin) checkForUpdate(); // light up the 🆕 dot if one's waiting
     notifyBtn.hidden = false;
@@ -398,6 +406,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     me = null;
     localStorage.removeItem(TOKEN_KEY);
     clearTimeout(prefsTimer);
+    invitesBanner.hidden = true;
     showView('auth');
     if (!inviteCode) applyRegistrationGate();
   }
@@ -759,6 +768,70 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     }
   });
 
+  // ── Incoming invitations (someone shared a wheel with me) ─────────
+  // Rendered from me.invites into a banner that sits above every view, so
+  // it's reachable whether the person has wheels of their own or not.
+  function renderInvites() {
+    const invites = (me && me.invites) || [];
+    invitesBanner.innerHTML = '';
+    if (!token || !invites.length) {
+      invitesBanner.hidden = true;
+      return;
+    }
+    invitesBanner.hidden = false;
+    for (const inv of invites) {
+      const meta = WHEEL_TYPE_META[inv.type] || WHEEL_TYPE_META.holidays;
+      const card = document.createElement('div');
+      card.className = 'invite-card';
+
+      const text = document.createElement('p');
+      text.className = 'invite-text';
+      const who = document.createElement('strong');
+      who.textContent = inv.from_name || 'Someone';
+      const what = document.createElement('strong');
+      what.textContent = `${meta.icon} ${inv.name}`;
+      text.append(who, document.createTextNode(' shared '), what,
+        document.createTextNode(' with you'));
+
+      const actions = document.createElement('div');
+      actions.className = 'invite-actions';
+      const accept = document.createElement('button');
+      accept.type = 'button';
+      accept.className = 'btn btn-primary';
+      accept.textContent = '✅ Accept';
+      accept.addEventListener('click', () => respondToInvite(inv.wheel_id, 'accept', accept));
+      const dismiss = document.createElement('button');
+      dismiss.type = 'button';
+      dismiss.className = 'btn btn-ghost';
+      dismiss.textContent = 'Dismiss';
+      dismiss.addEventListener('click', () => respondToInvite(inv.wheel_id, 'decline', dismiss));
+      actions.append(accept, dismiss);
+
+      card.append(text, actions);
+      invitesBanner.append(card);
+    }
+  }
+
+  async function respondToInvite(id, action, btn) {
+    const buttons = [...btn.parentElement.querySelectorAll('button')];
+    buttons.forEach((b) => { b.disabled = true; });
+    try {
+      me = await rootApi(`/wheels/${id}/${action}`, { method: 'POST' });
+      if (action === 'accept' && me.joined) {
+        // fresh member — send them through the same "star your dreams" welcome
+        justJoined = true;
+        joinedWheelId = me.joined;
+      }
+      applyMe();
+    } catch (err) {
+      buttons.forEach((b) => { b.disabled = false; });
+      const note = document.createElement('p');
+      note.className = 'form-error';
+      note.textContent = `⚠️ ${err.message}`;
+      btn.parentElement.append(note);
+    }
+  }
+
   // ── Share modal (per wheel) ───────────────────────────────────────
   function inviteLink(wheel) {
     return `${location.origin}${location.pathname}?join=${encodeURIComponent(wheel.code)}`;
@@ -777,9 +850,81 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     shareError.textContent = '';
     copyCodeBtn.textContent = '📋 Copy';
     copyLinkBtn.textContent = '📋 Copy';
+    renderSharePending(wheel);
+    renderSharePeople(wheel);
     shareModal.showModal();
   });
   closeShareBtn.addEventListener('click', () => shareModal.close());
+
+  // People already invited but not yet accepted — shown so the sharer
+  // knows a nudge is still outstanding.
+  function renderSharePending(wheel) {
+    const pending = (wheel && wheel.pending) || [];
+    sharePending.hidden = !pending.length;
+    if (pending.length) sharePending.textContent = `⏳ Waiting to accept: ${pending.join(', ')}`;
+  }
+
+  // Pick-from-a-list sharing: fetch who's invitable and offer a checkbox
+  // per person, then share to everyone ticked in one go.
+  async function renderSharePeople(wheel) {
+    selectedInvitees.clear();
+    shareInviteBtn.disabled = true;
+    shareInviteBtn.textContent = 'Share with selected';
+    sharePeopleList.innerHTML = '';
+    sharePeopleEmpty.hidden = true;
+    sharePeople.hidden = false;
+    let people = [];
+    try {
+      people = await rootApi(`/wheels/${wheel.id}/invitable`);
+    } catch {
+      sharePeople.hidden = true; // no list to offer — the code/link still work
+      return;
+    }
+    if (currentWheel() !== wheel) return; // modal moved on while we fetched
+    if (!people.length) {
+      sharePeopleEmpty.hidden = false;
+      return;
+    }
+    for (const p of people) {
+      const label = document.createElement('label');
+      label.className = 'share-person';
+      const box = document.createElement('input');
+      box.type = 'checkbox';
+      box.value = p.id;
+      box.addEventListener('change', () => {
+        if (box.checked) selectedInvitees.add(p.id); else selectedInvitees.delete(p.id);
+        shareInviteBtn.disabled = selectedInvitees.size === 0;
+      });
+      const name = document.createElement('span');
+      name.textContent = p.name;
+      label.append(box, name);
+      sharePeopleList.append(label);
+    }
+  }
+
+  shareInviteBtn.addEventListener('click', async () => {
+    if (!selectedInvitees.size) return;
+    const wheel = currentWheel();
+    if (!wheel) return;
+    shareInviteBtn.disabled = true;
+    shareError.textContent = '';
+    try {
+      me = await rootApi(`/wheels/${wheel.id}/invite`, {
+        method: 'POST',
+        body: JSON.stringify({ user_ids: [...selectedInvitees] }),
+      });
+      const n = me.invited || 0;
+      const fresh = me.wheels.find((w) => w.id === wheel.id) || wheel;
+      renderSharePending(fresh);      // now shows them under "waiting to accept"
+      await renderSharePeople(fresh); // and drops them from the pick list
+      shareInviteBtn.textContent = n
+        ? `✅ Shared with ${n} ${n === 1 ? 'person' : 'people'}`
+        : 'Nobody new to share with';
+    } catch (err) {
+      shareError.textContent = `⚠️ ${err.message}`;
+      shareInviteBtn.disabled = false;
+    }
+  });
 
   // The async Clipboard API only exists in secure contexts (https or
   // localhost); self-hosted installs usually run plain http on the LAN,

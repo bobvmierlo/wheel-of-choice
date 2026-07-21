@@ -32,6 +32,9 @@
     <nav class="wheel-tabs" id="wheel-tabs" aria-label="Wheel selection" hidden></nav>
   </header>
 
+  <!-- ── Incoming wheel invitations (accept / dismiss) ──────────────── -->
+  <section class="invites-banner" id="invites-banner" aria-label="Wheel invitations" hidden></section>
+
   <!-- ── Log in / register ──────────────────────────────────────────── -->
   <section class="gate" id="auth-view" hidden>
     <div class="gate-card">
@@ -345,6 +348,14 @@
       <code class="share-code share-link" id="share-link"></code>
       <button type="button" class="btn btn-ghost" id="copy-link-btn">📋 Copy</button>
     </div>
+    <div class="share-people" id="share-people" hidden>
+      <p class="manage-hint">Even easier — pick people who already have an account here and
+        share it straight to them. They'll get a notification and can accept it.</p>
+      <div class="share-people-list" id="share-people-list"></div>
+      <p class="share-people-empty" id="share-people-empty" hidden>Everyone here is already on this wheel 🎉</p>
+      <button type="button" class="btn btn-primary btn-block" id="share-invite-btn" disabled>Share with selected</button>
+    </div>
+    <p class="share-pending" id="share-pending" hidden></p>
     <p class="share-members" id="share-members"></p>
     <p class="form-error" id="share-error" role="alert"></p>
     <p class="share-leave-row">

@@ -53,6 +53,13 @@ full-size.
   wheel: entries, favourites and history stay in sync, while everyone
   keeps their own filters. Right after joining, a welcome screen invites
   the newcomer to star the entries *they* dream of.
+- **Share to people directly** 👥 — no need to pass a code around when
+  the person already has an account: the share screen lets you pick one
+  or more existing users from a list and send them the wheel. Each gets
+  a push notification and a banner at the top of the app to **Accept** or
+  **Dismiss** — the wheel only lands on their list once they accept, and
+  the sharer sees who's still "waiting to accept". The share-code and
+  invite-link routes stay exactly as they were.
 - **Spin the wheel** 🎡 — filled with every entry that matches your
   current preferences.
 - **Trip preferences** (travel wheels) that filter what lands on the
