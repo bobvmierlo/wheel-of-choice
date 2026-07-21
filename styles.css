@@ -329,9 +329,40 @@ body {
 .form-actions { display: flex; gap: 0.6rem; }
 
 .add-form textarea { resize: vertical; font-family: inherit; }
+.location-block { display: flex; flex-direction: column; gap: 0.4rem; }
 .location-row { display: flex; gap: 0.5rem; align-items: center; }
 .location-row input { flex: 1; }
 .location-row .btn { flex: none; white-space: nowrap; }
+.maps-results {
+  list-style: none;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0;
+  padding: 0;
+  max-height: 12rem;
+  overflow-y: auto;
+}
+.maps-result {
+  width: 100%;
+  text-align: left;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.4rem 0.6rem;
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+}
+.maps-result:hover { background: rgba(255, 255, 255, 0.12); }
+.maps-result-name { font-size: 0.85rem; font-weight: 600; }
+.maps-result-addr { font-size: 0.76rem; color: var(--text-dim); }
+.maps-note { font-size: 0.78rem; color: var(--text-dim); margin: 0; }
+.maps-note.ok { color: #6ee7a8; }
+.maps-note.err { color: var(--accent); }
 .link-editor { display: flex; flex-direction: column; gap: 0.45rem; font-size: 0.85rem; }
 .link-rows { display: flex; flex-direction: column; gap: 0.4rem; width: 100%; }
 .link-rows:empty { display: none; }

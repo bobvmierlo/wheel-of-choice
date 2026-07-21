@@ -1139,7 +1139,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       // the entry only carries name + flag; the address lives on the
       // destination (gone if it was deleted since — the name still works)
       const dest = state.destinations.find((x) => x.id === entry.dest_id);
-      const loc = (dest && dest.location) || '';
+      const loc = destLocation(dest);
       ghostBtn(infoPollActions, '⬇️ Add to calendar (.ics)', () => downloadIcs(entry.name, poll.locked_date, loc));
       const g = document.createElement('a');
       g.className = 'btn btn-ghost btn-small';
@@ -1614,6 +1614,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const settingHorizon = document.getElementById('setting-horizon');
   const settingsSaveBtn = document.getElementById('settings-save-btn');
   const settingsStatus = document.getElementById('settings-status');
+  const settingMapsKey = document.getElementById('setting-maps-key');
+  const mapsKeySaveBtn = document.getElementById('maps-key-save-btn');
+  const mapsKeyStatus = document.getElementById('maps-key-status');
   const settingRegistrationOpen = document.getElementById('setting-registration-open');
   const registrationOpenLabel = document.getElementById('registration-open-label');
   let tzListLoaded = false;
@@ -1624,6 +1627,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     settingHorizon.value = s.poll_horizon_days;
     settingRegistrationOpen.checked = !!s.registration_open;
     registrationOpenLabel.textContent = s.registration_open ? 'open to everyone' : 'invite-only';
+    // the raw Maps key only rides on admin settings responses
+    if ('google_maps_api_key' in s) settingMapsKey.value = s.google_maps_api_key || '';
     const [eMin, eMax] = s.bounds.evening_from;
     const [hMin, hMax] = s.bounds.poll_horizon_days;
     settingEveningFrom.min = eMin; settingEveningFrom.max = eMax;
@@ -1670,6 +1675,26 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       settingsStatus.textContent = `⚠️ ${err.message}`;
     } finally {
       settingsSaveBtn.disabled = false;
+    }
+  });
+
+  mapsKeySaveBtn.addEventListener('click', async () => {
+    mapsKeyStatus.textContent = '⏳ Saving…';
+    mapsKeySaveBtn.disabled = true;
+    const key = settingMapsKey.value.trim();
+    try {
+      fillSettings(await rootApi('/admin/settings', {
+        method: 'PUT',
+        body: JSON.stringify({ google_maps_api_key: key }),
+      }));
+      mapsKeyStatus.textContent = key
+        ? '✅ Saved — members can search for restaurant addresses.'
+        : '✅ Cleared — location search is off; members type addresses by hand.';
+      if (me) me.maps_enabled = !!key;  // reflect in the add form without a reload
+    } catch (err) {
+      mapsKeyStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      mapsKeySaveBtn.disabled = false;
     }
   });
 
@@ -2256,16 +2281,24 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   // The restaurant's address as a tappable maps link, or nothing.
   function setLocationLine(el, d) {
-    const loc = (d && !isTravelWheel() && d.location) || '';
+    const place = (d && !isTravelWheel() && d.place) || null;
+    const loc = (place && place.address) || (d && !isTravelWheel() && d.location) || '';
     el.hidden = !loc;
     el.innerHTML = '';
     if (!loc) return;
     const a = document.createElement('a');
-    a.href = mapsSearchUrl(d.name, loc);
+    // link to the exact pinned place when we have it, else a name search
+    a.href = (place && place.url) || mapsSearchUrl(d.name, loc);
     a.target = '_blank';
     a.rel = 'noopener noreferrer';
     a.textContent = `📍 ${loc}`;
     el.append(a);
+  }
+
+  // The best address string we hold for a restaurant — the exact Google
+  // place's address wins over the free-typed one. Used for the calendar.
+  function destLocation(d) {
+    return (d && ((d.place && d.place.address) || d.location)) || '';
   }
 
   // The info view: opened from a spin history entry (with trip status
@@ -2283,7 +2316,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     infoNotes.hidden = !notes;
     infoNotes.textContent = notes || '';
     renderLinkList(infoLinks, d ? destLinks(d) : fallbackLinks(name));
-    renderLinkList(infoPlan, planLinks(name, d && d.location));
+    renderLinkList(infoPlan, planLinks(name, destLocation(d)));
     infoStatus.hidden = !infoEntry || !isTravelWheel();
     if (infoEntry && isTravelWheel()) syncStatusControls();
     renderInfoPoll();  // restaurant history entries get the date-poll section
@@ -2373,7 +2406,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     setLocationLine(resultLocation, destination);
     resultNotes.hidden = !destination.notes;
     resultNotes.textContent = destination.notes || '';
-    renderLinkList(resultLinks, [...destLinks(destination), ...planLinks(destination.name, destination.location)]);
+    renderLinkList(resultLinks, [...destLinks(destination), ...planLinks(destination.name, destLocation(destination))]);
     if (isTravelWheel()) {
       vetoBtn.disabled = state.round.my_veto_used;
       vetoNote.textContent = state.round.my_veto_used
@@ -2731,15 +2764,94 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     });
   }
 
-  // Location (restaurant wheels): free-text address plus a Google Maps
-  // search shortcut — look the place up, copy its address back here.
+  // Location (restaurant wheels): an address field plus a Google Places
+  // search. When the server has a Maps key, searching lists real places to
+  // pick from — the pick fills the address and pins the exact place so its
+  // precise address rides into the calendar. Without a key it falls back to
+  // opening a Google Maps search in a new tab (what it did before).
   const addLocation = document.getElementById('add-location');
   const addLocationSearch = document.getElementById('add-location-search');
+  const mapsResults = document.getElementById('maps-results');
+  const mapsNote = document.getElementById('maps-note');
+  let addPlace = null;  // the Google place chosen for the entry, or null
 
-  addLocationSearch.addEventListener('click', () => {
-    const name = addNameInput.value.trim();
-    if (!name) { addNameInput.focus(); return; }
-    window.open(mapsSearchUrl(name, addLocation.value.trim()), '_blank', 'noopener');
+  function clearMapsResults() {
+    mapsResults.innerHTML = '';
+    mapsResults.hidden = true;
+  }
+
+  function setMapsNote(text, cls) {
+    mapsNote.textContent = text || '';
+    mapsNote.hidden = !text;
+    mapsNote.className = 'maps-note' + (cls ? ` ${cls}` : '');
+  }
+
+  function resetLocationSearch() {
+    addPlace = null;
+    clearMapsResults();
+    setMapsNote('');
+  }
+
+  function pickPlace(place) {
+    addPlace = place;
+    if (place.address) addLocation.value = place.address;  // programmatic → no 'input' event
+    clearMapsResults();
+    setMapsNote(`📍 Linked to ${place.name || place.address}`, 'ok');
+  }
+
+  async function runMapsSearch() {
+    const q = addLocation.value.trim() || addNameInput.value.trim();
+    if (q.length < 2) { addNameInput.focus(); return; }
+    // no key on this server → the old behaviour: open Maps in a new tab
+    if (!me || !me.maps_enabled) {
+      window.open(mapsSearchUrl(addNameInput.value.trim() || q, addLocation.value.trim()), '_blank', 'noopener');
+      return;
+    }
+    clearMapsResults();
+    setMapsNote('🔍 Searching…');
+    addLocationSearch.disabled = true;
+    try {
+      const { results } = await rootApi(`/maps/search?q=${encodeURIComponent(q)}`);
+      if (!results.length) { setMapsNote('No places found — try the name with the town.'); return; }
+      setMapsNote('');
+      for (const r of results) {
+        const li = document.createElement('li');
+        const b = document.createElement('button');
+        b.type = 'button';
+        b.className = 'maps-result';
+        const nm = document.createElement('span');
+        nm.className = 'maps-result-name';
+        nm.textContent = r.name || r.address;
+        const ad = document.createElement('span');
+        ad.className = 'maps-result-addr';
+        ad.textContent = r.address || '';
+        b.append(nm, ad);
+        b.addEventListener('click', () => pickPlace(r));
+        li.append(b);
+        mapsResults.append(li);
+      }
+      mapsResults.hidden = false;
+    } catch (err) {
+      setMapsNote(`⚠️ ${err.message}`, 'err');
+    } finally {
+      addLocationSearch.disabled = false;
+    }
+  }
+
+  addLocationSearch.addEventListener('click', runMapsSearch);
+
+  // Enter in the address field searches rather than submitting the form
+  addLocation.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); runMapsSearch(); }
+  });
+
+  // Hand-editing the address unlinks the pinned place (its address no
+  // longer matches) so a stale pin isn't saved with the entry
+  addLocation.addEventListener('input', () => {
+    if (addPlace && addLocation.value.trim() !== (addPlace.address || '')) {
+      addPlace = null;
+      setMapsNote('');
+    }
   });
 
   // Links editor: a row of label + URL inputs per link
@@ -2800,6 +2912,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       setCheckedValues('add-party', d.party);
     } else {
       addLocation.value = d.location || '';
+      addPlace = d.place || null;
+      clearMapsResults();
+      setMapsNote(addPlace ? `📍 Linked to ${addPlace.name || addPlace.address}` : '', addPlace ? 'ok' : '');
     }
     addNotes.value = d.notes || '';
     linkRows.innerHTML = '';
@@ -2815,6 +2930,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     cancelEditBtn.hidden = true;
     addForm.reset();
     linkRows.innerHTML = '';
+    resetLocationSearch();
   }
 
   cancelEditBtn.addEventListener('click', exitEditMode);
@@ -2837,6 +2953,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       payload.party = checkedValues('add-party');
     } else {
       payload.location = addLocation.value.trim();
+      payload.place = addPlace;  // null unless a place was picked from search
     }
     try {
       if (state.editingId) {

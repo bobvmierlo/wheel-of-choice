@@ -72,7 +72,13 @@ full-size.
   wide) — the wheel leans toward what you agree on.
 - **Manage the wheel** ⚙️ — untick entries to keep them off the wheel,
   ✏️ edit any entry's name and tags, delete them, or add your own. On a
-  restaurant wheel the form is just a name, an emoji, notes and links.
+  restaurant wheel the form is a name, an emoji, a **location**, notes and
+  links. If the server has a Google Maps key configured, the location
+  field can **search for the exact place** by name or address and pin it,
+  so its precise address drops straight into the calendar invite when a
+  date is locked — see [Restaurant location
+  search](#-restaurant-location-search-optional). Without a key it stays a
+  plain address field (and the 🔍 button just opens a Maps search).
 - **Veto & respin** 🙅 (travel wheels) — every member gets exactly one
   veto per round (tracked on the server, so no sneaky double vetoes),
   and a spin one member accepts waits for the others' thumbs-up: their
@@ -388,6 +394,79 @@ each member does this on their own account.
   public-holiday calendars would otherwise paint whole weeks red. Only
   timed evening events (from the evening-start hour, 17:00 by default —
   see **🛠️ Admin → Date polls**) count.
+
+## 🔍 Restaurant location search (optional)
+
+When you add a restaurant, the location field can look the place up on
+Google Maps — search by **name or address**, pick the right one from the
+list, and the app pins that exact place. Its precise, Google-formatted
+address is then what lands in the **calendar invite** (the .ics and Google
+Calendar buttons, and the date-locked push) when everyone settles on a
+night, and the 📍 link on the pick points straight at the place on Maps
+instead of a name search.
+
+This one feature needs a **Google Maps Platform API key** — unlike the
+calendar linking above, there's no way around Google here, because the
+place data comes from Google. It's **off until an admin adds a key**;
+without one the location field is just a plain address box you type into.
+The key lives **only on the server** and is used to proxy the searches, so
+it's never exposed to members' browsers.
+
+### Getting a key from the Google Cloud Console
+
+1. **Create (or pick) a project** at
+   [console.cloud.google.com](https://console.cloud.google.com) — top bar
+   → the project dropdown → *New Project*.
+2. **Enable billing for the project.** The Places API is a paid API and
+   won't return results without a billing account attached (*Billing* in
+   the console). Google gives every account a recurring **free monthly
+   usage allowance**, which comfortably covers a household adding
+   restaurants now and then — but the card on file is mandatory. Set a
+   **budget alert** (Billing → *Budgets & alerts*) if you want a safety
+   net.
+3. **Enable the *Places API (New)*.** Go to *APIs & Services* → *Library*,
+   search for **“Places API (New)”**, and click **Enable**. This is the
+   one the app uses (the text-search endpoint
+   `places.googleapis.com/v1/places:searchText`). Note it's a *different*
+   product from the older, legacy **“Places API”** — enabling only the
+   legacy one won't work, so make sure you pick the **(New)** entry.
+4. **Create the key.** *APIs & Services* → *Credentials* → *Create
+   credentials* → **API key**. Copy the `AIza…` string it gives you.
+5. **Lock the key down** (strongly recommended — an unrestricted key that
+   leaks can be run up on someone else's projects). Click the key to edit
+   it:
+   - **Application restrictions → IP addresses.** The app calls Google
+     **from your server**, not from browsers, so restrict the key to your
+     server's public IP address(es). (Do *not* use an “HTTP referrers”
+     restriction — that's for keys used in browser JavaScript, which this
+     isn't.)
+   - **API restrictions → Restrict key** → tick **Places API (New)** only,
+     so a leaked key can't be used against anything else.
+
+### Turning it on
+
+Open **🛠️ Admin → Restaurant location search**, paste the key into the
+**🔑 Maps API key** field, and **Save**. Search lights up for everyone on
+the server straight away — no restart. To switch it back off, clear the
+field and save; existing restaurants keep whatever address they already
+have.
+
+### Troubleshooting
+
+- *“maps search failed — the server's API key may be invalid, or the
+  Places API isn't enabled for it”* — the key is wrong, billing isn't
+  enabled on the project, or you enabled the legacy *Places API* instead
+  of ***Places API (New)***. Re-check steps 2–3.
+- *No results for a place you know exists* — try the name **with the town
+  or street** (“Trattoria Roma, Utrecht” rather than just “Trattoria
+  Roma”); text search leans on the extra context.
+- *Searches worked, then started failing* — if you added an IP
+  restriction, confirm it lists your server's **current** public IP (it
+  can change on some hosts), and that the key is restricted to *Places API
+  (New)*, not a different Places product.
+- *The 🔍 button opens Google Maps in a new tab instead of showing a list*
+  — no key is configured on this server (that's the built-in fallback);
+  add one in the admin panel to get inline results.
 
 ## Seed data & sources
 

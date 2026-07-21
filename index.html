@@ -539,6 +539,25 @@
       </div>
       <p class="update-status" id="settings-status" role="status"></p>
     </div>
+    <h3>Restaurant location search</h3>
+    <p class="manage-hint">Paste a <a href="https://developers.google.com/maps/documentation/places/web-service/text-search"
+      target="_blank" rel="noopener noreferrer">Google Maps Platform</a> API key with the
+      <strong>Places API (New)</strong> enabled, and members can look up a restaurant's exact
+      address when adding it — that address is what lands in the calendar invite. Leave it empty
+      to switch the search off; members can still type an address by hand.</p>
+    <div class="admin-settings">
+      <label class="admin-setting">
+        <span class="admin-setting-label">🔑 Maps API key</span>
+        <span class="admin-setting-field">
+          <input type="text" id="setting-maps-key" autocomplete="off" spellcheck="false" placeholder="AIza…">
+        </span>
+        <span class="admin-setting-hint">Stored on the server and used only to look places up — never sent to members' browsers.</span>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary btn-small" id="maps-key-save-btn">Save API key</button>
+      </div>
+      <p class="update-status" id="maps-key-status" role="status"></p>
+    </div>
     <h3>Backup</h3>
     <p class="manage-hint">Everything — accounts, wheels, history — lives in one
       <code>db.json</code> on the server. Download a copy now and then; restoring
@@ -582,11 +601,15 @@
           <option value="longhaul">Long-haul</option>
         </select>
       </div>
-      <div class="location-row food-only">
-        <input type="text" id="add-location" maxlength="200"
-               placeholder="Address — paste it from Google Maps">
-        <button type="button" class="btn btn-ghost btn-small" id="add-location-search"
-                title="Search Google Maps for this restaurant — copy the address back here">🔍 Maps</button>
+      <div class="location-block food-only">
+        <div class="location-row">
+          <input type="text" id="add-location" maxlength="200"
+                 placeholder="Address — or search for the place">
+          <button type="button" class="btn btn-ghost btn-small" id="add-location-search"
+                  title="Search Google Maps for this place">🔍 Search</button>
+        </div>
+        <ul class="maps-results" id="maps-results" hidden></ul>
+        <p class="maps-note" id="maps-note" hidden></p>
       </div>
       <div class="add-checks travel-only" id="add-vibes">
         <span class="checks-label">Vibes:</span>

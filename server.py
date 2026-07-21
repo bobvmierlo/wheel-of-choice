@@ -52,6 +52,7 @@ import socket
 import subprocess
 import threading
 import time
+import urllib.error
 import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -619,6 +620,13 @@ def wheel_summary(db, wheel):
     }
 
 
+def maps_api_key(db):
+    """The Google Maps Platform key an admin has stored, or '' when
+    restaurant location search is switched off. Never sent to the browser
+    — only used server-side to proxy Places calls (see maps_search)."""
+    return str((db.get("settings") or {}).get("google_maps_api_key") or "").strip()
+
+
 def me_payload(db, user):
     wheels = [db["wheels"][wid] for wid in user.get("wheels", []) if wid in db["wheels"]]
     return {
@@ -627,6 +635,9 @@ def me_payload(db, user):
         "wheels": [wheel_summary(db, w) for w in wheels],
         # lets the first-wheel screen offer "keep your old wheels"
         "legacy_available": bool(unclaimed_wheel_ids(db)),
+        # the restaurant add/edit form only offers inline place search when
+        # the server has a key configured; otherwise it falls back to a link
+        "maps_enabled": bool(maps_api_key(db)),
     }
 
 
@@ -1262,6 +1273,75 @@ def availability():
     return jsonify({**config, "enabled": True, "linked": True, "days": days})
 
 
+# ── Restaurant location lookup (Google Places, optional) ─────────────
+# With an admin-supplied Google Maps Platform key (Places API enabled),
+# the restaurant add/edit form can search for a place by name or address
+# and pin the exact one. We store that place on the destination so its
+# formatted address rides straight into calendar invites. All calls are
+# proxied here so the key never reaches the browser. The host is fixed
+# (Google), so there's no SSRF surface as there is with user ICS URLs.
+PLACES_SEARCH_URL = "https://places.googleapis.com/v1/places:searchText"
+PLACES_FIELD_MASK = ("places.id,places.displayName,places.formattedAddress,"
+                     "places.location,places.googleMapsUri")
+PLACES_TIMEOUT = 8  # seconds to wait on Google before giving up
+PLACES_MAX_RESULTS = 6
+
+
+def places_text_search(query, api_key):
+    """Google Places (New) text search → a trimmed list of candidate
+    places. Raises on transport/HTTP errors for the caller to translate."""
+    body = json.dumps({"textQuery": query,
+                       "maxResultCount": PLACES_MAX_RESULTS}).encode("utf-8")
+    req = urllib.request.Request(
+        PLACES_SEARCH_URL, data=body, method="POST",
+        headers={
+            "Content-Type": "application/json",
+            "X-Goog-Api-Key": api_key,
+            "X-Goog-FieldMask": PLACES_FIELD_MASK,
+            "User-Agent": "wheel-of-choice",
+        },
+    )
+    with urllib.request.urlopen(req, timeout=PLACES_TIMEOUT) as resp:  # noqa: S310 (fixed Google host)
+        data = json.loads(resp.read(1_000_000).decode("utf-8"))
+    results = []
+    for p in data.get("places", [])[:PLACES_MAX_RESULTS]:
+        loc = p.get("location") or {}
+        results.append({
+            "id": str(p.get("id", "")),
+            "name": (p.get("displayName") or {}).get("text", ""),
+            "address": p.get("formattedAddress", ""),
+            "lat": loc.get("latitude"),
+            "lng": loc.get("longitude"),
+            "url": p.get("googleMapsUri", ""),
+        })
+    return results
+
+
+@app.get("/api/maps/search")
+def maps_search():
+    """Proxy a place search for the add/edit form. Any signed-in member may
+    use it; the key stays server-side. 503 when no key is configured."""
+    with _lock:
+        db = load_db()
+        current_user(db)
+        key = maps_api_key(db)
+    if not key:
+        abort(503, description="restaurant search isn't set up on this server")
+    query = (request.args.get("q") or "").strip()[:200]
+    if len(query) < 2:
+        return jsonify({"results": []})
+    try:
+        results = places_text_search(query, key)
+    except urllib.error.HTTPError as err:
+        app.logger.info("places search HTTP %s", err.code)
+        abort(502, description="maps search failed — the server's API key may be "
+                               "invalid, or the Places API isn't enabled for it")
+    except Exception as err:  # noqa: BLE001 — network/parse errors all become one message
+        app.logger.info("places search failed: %s", err)
+        abort(502, description="couldn't reach Google Maps just now — try again")
+    return jsonify({"results": results})
+
+
 # ── Wheel seeding (travel wheels only) ───────────────────────────────
 def catalog_distance(entry, home):
     """A catalogue entry's distance relative to a home region: long-haul
@@ -1552,7 +1632,10 @@ def admin_get_settings():
     with _lock:
         db = load_db()
         require_admin(db)
-        return jsonify({**settings_view(db), "zones": ALL_ZONES})
+        # the raw Maps key rides along only on this admin-only endpoint, so
+        # the admin can see and edit it; it never appears in any other view
+        return jsonify({**settings_view(db), "zones": ALL_ZONES,
+                        "google_maps_api_key": maps_api_key(db)})
 
 
 @app.put("/api/admin/settings")
@@ -1577,9 +1660,16 @@ def admin_put_settings():
                 payload.get("poll_horizon_days"), current["poll_horizon_days"])
         if "registration_open" in payload:
             stored["registration_open"] = bool(payload.get("registration_open"))
+        if "google_maps_api_key" in payload:
+            # an empty value clears it (switches location search back off)
+            key = str(payload.get("google_maps_api_key") or "").strip()[:200]
+            if key:
+                stored["google_maps_api_key"] = key
+            else:
+                stored.pop("google_maps_api_key", None)
         save_db(db)
         apply_runtime_settings(db)
-        view = settings_view(db)
+        view = {**settings_view(db), "google_maps_api_key": maps_api_key(db)}
     with _cal_lock:  # busy-sets were digested against the old timezone/window
         _cal_cache.clear()
     return jsonify(view)
@@ -1837,6 +1927,48 @@ def clean_links(values, fallback):
     return links
 
 
+def clean_place(place):
+    """Validate the structured Google place a restaurant may carry, or
+    None. Only the fields we display or drop into a calendar are kept; a
+    dict with nothing useful in it collapses to None. The URL must be a
+    plain https link (it's rendered as an anchor)."""
+    if not isinstance(place, dict):
+        return None
+
+    def text(key, cap):
+        return str(place.get(key, "") or "").strip()[:cap]
+
+    def coord(key):
+        v = place.get(key)
+        # reject bools (isinstance(True, int) is True) and non-numbers
+        return float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) else None
+
+    url = text("url", 500)
+    if not url.startswith("https://"):
+        url = ""
+    cleaned = {
+        "id": text("id", 300),
+        "name": text("name", 200),
+        "address": text("address", 300),
+        "lat": coord("lat"),
+        "lng": coord("lng"),
+        "url": url,
+    }
+    if not (cleaned["id"] or cleaned["address"] or cleaned["name"]):
+        return None
+    return cleaned
+
+
+def dest_calendar_location(dest):
+    """The best address for a restaurant's calendar entry and map link:
+    the exact Google-resolved address when we have one, else the address
+    the member typed. Empty string when neither is set."""
+    if not dest:
+        return ""
+    place = dest.get("place") or {}
+    return place.get("address") or dest.get("location") or ""
+
+
 def clean_destination(payload, existing=None, travel=True):
     """Normalise and validate a destination payload; raises ValueError.
     Restaurant entries skip the travel-only fields — they're just a
@@ -1863,9 +1995,13 @@ def clean_destination(payload, existing=None, travel=True):
         "links": clean_links(payload.get("links", base.get("links", [])), base.get("links", [])),
     }
     if not travel:
-        # the restaurant's address — free text, usually pasted from Google
-        # Maps; it rides into the calendar event once a date locks
+        # the restaurant's address — free text, or the formatted address of
+        # a Google place picked in the form; it rides into the calendar
+        # event once a date locks
         dest["location"] = str(payload.get("location", base.get("location", ""))).strip()[:200]
+        # the exact Google place behind that address, when one was chosen —
+        # its precise address/link power the calendar buttons and map link
+        dest["place"] = clean_place(payload.get("place", base.get("place")))
         return dest
 
     def subset(key, allowed, fallback):
@@ -2495,7 +2631,7 @@ def lock_poll(wheel_id, entry_id):
             f"{user['name']} locked it in on {wheel['name']} — pop it in your calendar 📅",
             wheel,
             tag=f"{wheel['id']}-poll-{entry_id}",
-            gcal_url=dinner_gcal_url(entry["name"], (dest or {}).get("location", ""), date_str),
+            gcal_url=dinner_gcal_url(entry["name"], dest_calendar_location(dest), date_str),
             # body tap (the only actionable path on iOS PWAs) deep-links the
             # app to this dinner's calendar buttons
             url=f"/?dinner={quote(entry_id)}#{wheel['id']}",
