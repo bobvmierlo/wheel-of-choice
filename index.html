@@ -673,6 +673,26 @@
     <ul id="dest-list" class="dest-list"></ul>
   </dialog>
 
+  <!-- ── Mobile-web nudge: add to home screen for push + calendar ─────
+       Shown only on a phone/tablet browser that isn't already running
+       the installed app. Getting it onto the Home Screen is what unlocks
+       push notifications (iOS needs it) and keeps the calendar link a tap
+       away. See maybePromotePwa in app.js. -->
+  <div class="pwa-toast" id="pwa-toast" role="status" aria-live="polite" hidden>
+    <button type="button" class="pwa-toast-close" id="pwa-toast-close" aria-label="Dismiss">✕</button>
+    <p class="pwa-toast-text">📲 <strong>Add Wheel of Choice to your home screen.</strong>
+      It runs like a real app and unlocks 🔔 push notifications and 📆 calendar links.</p>
+    <ol class="pwa-toast-steps" id="pwa-toast-steps" hidden>
+      <li>Tap the <strong>Share</strong> button</li>
+      <li>Choose <strong>Add to Home Screen</strong></li>
+      <li>Open 🎡 from your Home Screen</li>
+    </ol>
+    <div class="pwa-toast-actions">
+      <button type="button" class="btn btn-primary btn-small" id="pwa-toast-install">📲 Add to Home Screen</button>
+      <button type="button" class="btn btn-ghost btn-small" id="pwa-toast-dismiss">Not now</button>
+    </div>
+  </div>
+
   <footer class="site-footer">
     <span class="footer-version" id="footer-version"></span>
   </footer>

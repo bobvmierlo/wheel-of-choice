@@ -351,6 +351,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     passwordBtn.hidden = false;
     syncPushSubscription(); // fire-and-forget — keeps this device buzzing for this account
     syncCalendarButton(); // shows 📆 only if the server can read calendars
+    maybePromotePwa(); // nudge phone-web users onto the Home Screen (once)
     const invite = inviteCode;
     inviteCode = '';
     inviteBanner.hidden = true;
@@ -1014,6 +1015,58 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       if (msg.type !== 'wheel-nav' || !msg.url) return;
       navigateToDeepLink(msg.url);
     });
+  }
+
+  // ── "Add to home screen" nudge (mobile web only) ──────────────────
+  // On a phone browser the app is far more useful once it's on the Home
+  // Screen: push notifications need it (iOS especially) and the calendar
+  // stays a tap away. Chrome/Android hands us a real install prompt via
+  // beforeinstallprompt; iOS has none, so we spell out the Share → Add
+  // steps instead. Shown once per browser until dismissed.
+  const PWA_TOAST_DISMISSED_KEY = 'wheel-pwa-toast-dismissed';
+  const isMobile = isIOS || /Android|Mobile/i.test(navigator.userAgent);
+  const pwaToast = document.getElementById('pwa-toast');
+  const pwaToastSteps = document.getElementById('pwa-toast-steps');
+  const pwaToastInstall = document.getElementById('pwa-toast-install');
+  let deferredInstallPrompt = null;
+
+  window.addEventListener('beforeinstallprompt', (event) => {
+    // Hold onto it so our own button can trigger the native prompt.
+    event.preventDefault();
+    deferredInstallPrompt = event;
+  });
+
+  function dismissPwaToast() {
+    pwaToast.hidden = true;
+    try { localStorage.setItem(PWA_TOAST_DISMISSED_KEY, '1'); } catch { /* private mode — fine */ }
+  }
+
+  // Installed (or already added to the Home Screen): never nag again.
+  window.addEventListener('appinstalled', dismissPwaToast);
+
+  document.getElementById('pwa-toast-close').addEventListener('click', dismissPwaToast);
+  document.getElementById('pwa-toast-dismiss').addEventListener('click', dismissPwaToast);
+
+  pwaToastInstall.addEventListener('click', async () => {
+    if (deferredInstallPrompt) {
+      // Android/Chrome: fire the browser's own install prompt.
+      deferredInstallPrompt.prompt();
+      const { outcome } = await deferredInstallPrompt.userChoice.catch(() => ({ outcome: 'dismissed' }));
+      deferredInstallPrompt = null;
+      if (outcome === 'accepted') dismissPwaToast();
+      return;
+    }
+    // iOS (and anything without the native prompt): reveal the manual steps.
+    pwaToastSteps.hidden = false;
+    pwaToastInstall.hidden = true;
+  });
+
+  function maybePromotePwa() {
+    if (!isMobile || isStandalone) return;   // desktop or already installed
+    let dismissed = false;
+    try { dismissed = localStorage.getItem(PWA_TOAST_DISMISSED_KEY) === '1'; } catch { /* ignore */ }
+    if (dismissed) return;
+    pwaToast.hidden = false;
   }
 
   // Land on the wheel (and dinner) a notification points at, from a URL
