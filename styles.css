@@ -609,6 +609,30 @@ body {
   margin-bottom: 1rem;
 }
 
+/* ── Incoming wheel invitations (top-of-page banner) ───────────────── */
+.invites-banner {
+  max-width: 720px;
+  margin: 0.6rem auto 0;
+  padding: 0 1.2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+}
+.invite-card {
+  background: rgba(110, 231, 168, 0.1);
+  border: 1px solid rgba(110, 231, 168, 0.4);
+  border-radius: 14px;
+  padding: 0.75rem 1rem;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.6rem;
+}
+.invite-text { font-size: 0.92rem; line-height: 1.4; }
+.invite-actions { display: flex; gap: 0.5rem; flex-shrink: 0; }
+.invite-actions .btn { padding: 0.45rem 1rem; }
+
 /* ── Share modal ───────────────────────────────────────────────────── */
 .share-code-row { display: flex; align-items: center; gap: 0.7rem; margin: 0.4rem 0 0.8rem; width: 100%; }
 .share-link {
@@ -632,6 +656,34 @@ body {
 .share-members { color: var(--text-dim); font-size: 0.88rem; margin-bottom: 1.2rem; }
 .share-modal h3 { font-size: 0.95rem; margin: 0.6rem 0 0.3rem; padding-top: 0.8rem; border-top: 1px solid var(--panel-border); }
 .share-leave-row { margin-top: 1rem; }
+
+/* Share straight to existing accounts (pick-from-a-list) */
+.share-people { margin: 0.3rem 0 0.9rem; padding-top: 0.8rem; border-top: 1px solid var(--panel-border); }
+.share-people-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  max-height: 210px;
+  overflow-y: auto;
+  margin: 0.5rem 0 0.7rem;
+  border: 1px solid var(--panel-border);
+  border-radius: 12px;
+  padding: 0.4rem;
+}
+.share-person {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.45rem 0.55rem;
+  border-radius: 8px;
+  cursor: pointer;
+  font-size: 0.92rem;
+}
+.share-person:hover { background: rgba(255, 255, 255, 0.06); }
+.share-person input { width: 1.1rem; height: 1.1rem; accent-color: var(--accent); cursor: pointer; flex-shrink: 0; }
+.share-people-empty { color: var(--text-dim); font-size: 0.88rem; margin: 0.5rem 0 0.7rem; }
+.share-pending { color: var(--text-dim); font-size: 0.85rem; margin-bottom: 0.6rem; }
+.btn-block { width: 100%; }
 
 /* ── Notifications modal ───────────────────────────────────────────── */
 .push-state { font-weight: 600; margin: 0.2rem 0 0.8rem; min-height: 1.3em; }

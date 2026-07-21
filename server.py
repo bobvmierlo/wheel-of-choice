@@ -94,6 +94,7 @@ VAPID_KEY_FILE = DATA_DIR / "vapid-private-key.pem"
 VAPID_SUBJECT = os.environ.get("VAPID_SUBJECT", "mailto:admin@example.com")
 PUSH_TTL = 12 * 3600  # seconds the relay keeps an undelivered push — a spin is stale news after that
 MAX_PUSH_SUBS = 10  # devices per user; the oldest subscription falls off
+MAX_INVITE_BATCH = 20  # people you can share a wheel with in one go
 
 WHEEL_TYPES = {
     "holidays": {"label": "Holidays", "travel": True, "seed": ROOT / "seed-destinations.json"},
@@ -603,6 +604,36 @@ def wheel_members(db, wheel_id):
     return sorted(u["name"] for u in wheel_member_users(db, wheel_id))
 
 
+def wheel_pending_invitees(db, wheel_id):
+    """Names of people invited to this wheel who haven't accepted yet —
+    shown to the sharer as 'waiting to accept'. Someone who joined by
+    another route in the meantime is already a member, so drops off."""
+    return sorted(
+        u["name"] for u in db["users"].values()
+        if wheel_id not in u.get("wheels", [])
+        and any(inv["wheel_id"] == wheel_id for inv in u.get("invites", []))
+    )
+
+
+def pending_invites_for(db, user):
+    """The wheel invitations waiting on this user. A dangling invite —
+    the wheel is gone, or they've since joined it another way — is
+    skipped so the banner never offers something that can't be accepted."""
+    out = []
+    for inv in user.get("invites", []):
+        wheel = db["wheels"].get(inv["wheel_id"])
+        if wheel is None or inv["wheel_id"] in user.get("wheels", []):
+            continue
+        out.append({
+            "wheel_id": wheel["id"],
+            "type": wheel["type"],
+            "name": wheel["name"],
+            "from_name": inv.get("from_name", ""),
+            "at": inv.get("at", ""),
+        })
+    return out
+
+
 def unclaimed_wheel_ids(db):
     """Wheels nobody has in their list — exist only after migrating a
     pre-account database, holding that household's old wheels."""
@@ -617,6 +648,7 @@ def wheel_summary(db, wheel):
         "name": wheel["name"],
         "code": wheel["code"],
         "members": wheel_members(db, wheel["id"]),
+        "pending": wheel_pending_invitees(db, wheel["id"]),
     }
 
 
@@ -633,6 +665,8 @@ def me_payload(db, user):
         "user": {"id": user["id"], "name": user["name"], "admin": bool(user.get("admin"))},
         "prefs": user.get("prefs", {}),
         "wheels": [wheel_summary(db, w) for w in wheels],
+        # wheels other people have shared with you, awaiting accept/decline
+        "invites": pending_invites_for(db, user),
         # lets the first-wheel screen offer "keep your old wheels"
         "legacy_available": bool(unclaimed_wheel_ids(db)),
         # the restaurant add/edit form only offers inline place search when
@@ -656,6 +690,10 @@ def start_session(db, user):
 def drop_wheel_if_empty(db, wheel_id):
     if not wheel_member_users(db, wheel_id):
         db["wheels"].pop(wheel_id, None)
+        # tidy up any invitations that were still pointing at it
+        for u in db["users"].values():
+            if u.get("invites"):
+                u["invites"] = [i for i in u["invites"] if i["wheel_id"] != wheel_id]
 
 
 @app.post("/api/auth/register")
@@ -1555,6 +1593,8 @@ def join_wheel():
         if target["id"] in user.get("wheels", []):
             abort(400, description="that wheel is already in your list")
         user.setdefault("wheels", []).append(target["id"])
+        # joining by code settles any pending invitation to the same wheel
+        user["invites"] = [i for i in user.get("invites", []) if i["wheel_id"] != target["id"]]
         save_db(db)
         me = me_payload(db, user)
         me["joined"] = target["id"]
@@ -1587,6 +1627,135 @@ def leave_wheel(wheel_id):
         user["wheels"].remove(wheel_id)
         user.get("prefs", {}).pop(wheel_id, None)
         drop_wheel_if_empty(db, wheel_id)
+        save_db(db)
+        return jsonify(me_payload(db, user))
+
+
+# ── Sharing to existing accounts (invite / accept / decline) ─────────
+def wheel_i_share(db, user, wheel_id):
+    """A wheel the current user is on — the gate for inviting others.
+    You can only share a wheel you're a member of yourself."""
+    wheel = db["wheels"].get(wheel_id)
+    if wheel is None or wheel_id not in user.get("wheels", []):
+        abort(404, description="that wheel isn't in your list")
+    return wheel
+
+
+@app.get("/api/wheels/<wheel_id>/invitable")
+def wheel_invitable(wheel_id):
+    """People you could share this wheel with: every other account on the
+    server that isn't already on it or already invited. Lets the share
+    screen offer a pick-from-a-list instead of passing a code around."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel_i_share(db, user, wheel_id)
+        out = []
+        for u in sorted(db["users"].values(), key=lambda x: x["name"].lower()):
+            if u["id"] == user["id"] or wheel_id in u.get("wheels", []):
+                continue
+            if any(inv["wheel_id"] == wheel_id for inv in u.get("invites", [])):
+                continue  # already has a pending invite — see the wheel's "pending"
+            out.append({"id": u["id"], "name": u["name"]})
+        return jsonify(out)
+
+
+@app.post("/api/wheels/<wheel_id>/invite")
+def invite_to_wheel(wheel_id):
+    """Share this wheel with existing accounts by id. Each gets a pending
+    invitation (and a push) to accept or decline — the wheel only lands
+    on their list once they say yes. You must be on the wheel to share
+    it. Ids that are unknown, already a member, or already invited are
+    skipped quietly, so re-sending is safe."""
+    payload = request.get_json(force=True, silent=True) or {}
+    ids = payload.get("user_ids")
+    if not isinstance(ids, list) or not ids:
+        abort(400, description="pick at least one person to share with")
+    ids = [str(x) for x in ids][:MAX_INVITE_BATCH]
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        wheel = wheel_i_share(db, user, wheel_id)
+        now = datetime.now(timezone.utc).isoformat()
+        invited = []
+        for uid in ids:
+            target = db["users"].get(uid)
+            if target is None or target["id"] == user["id"]:
+                continue
+            if wheel_id in target.get("wheels", []):
+                continue  # already spinning this one
+            pending = target.setdefault("invites", [])
+            if any(inv["wheel_id"] == wheel_id for inv in pending):
+                continue  # don't stack a second invite (or a second push)
+            pending.append({
+                "wheel_id": wheel_id,
+                "from": user["id"],
+                "from_name": user["name"],
+                "at": now,
+            })
+            invited.append(target)
+        if invited:
+            save_db(db)
+            for target in invited:
+                push_to_users(
+                    [target],
+                    f"🎡 {user['name']} shared {wheel['name']} with you",
+                    "Tap to accept and start spinning together!",
+                    wheel,
+                    tag=f"{wheel_id}-invite",
+                    # land on the app root — the invitation banner sits at the
+                    # top of every view, so it's right there to accept. (Not a
+                    # /#wheel deep link: they aren't a member of it yet.)
+                    url="/",
+                )
+        me = me_payload(db, user)
+        me["invited"] = len(invited)
+        return jsonify(me)
+
+
+@app.post("/api/wheels/<wheel_id>/accept")
+def accept_invite(wheel_id):
+    """Accept a wheel someone shared with you — it joins your list just
+    like a share code, and the invitation is spent."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        invites = user.get("invites", [])
+        has_invite = any(i["wheel_id"] == wheel_id for i in invites)
+        wheel = db["wheels"].get(wheel_id)
+        # the invite could have been withdrawn, or the wheel emptied out,
+        # between the banner rendering and the tap
+        if not has_invite or wheel is None:
+            user["invites"] = [i for i in invites if i["wheel_id"] != wheel_id]
+            save_db(db)
+            abort(404, description="that invitation isn't waiting for you anymore")
+        user["invites"] = [i for i in invites if i["wheel_id"] != wheel_id]
+        if wheel_id not in user.get("wheels", []):
+            user.setdefault("wheels", []).append(wheel_id)
+        save_db(db)
+        push_to_users(
+            [u for u in wheel_member_users(db, wheel_id) if u["id"] != user["id"]],
+            f"🎉 {user['name']} joined {wheel['name']}",
+            "Say hi — and give the wheel a spin together!",
+            wheel,
+            tag=f"{wheel_id}-joined",
+        )
+        me = me_payload(db, user)
+        me["joined"] = wheel_id  # land them on the welcome screen, like a code-join
+        return jsonify(me)
+
+
+@app.post("/api/wheels/<wheel_id>/decline")
+def decline_invite(wheel_id):
+    """Turn down a shared wheel — the invitation is dropped and the wheel
+    never touches your list."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        invites = user.get("invites", [])
+        if not any(i["wheel_id"] == wheel_id for i in invites):
+            abort(404, description="that invitation isn't waiting for you anymore")
+        user["invites"] = [i for i in invites if i["wheel_id"] != wheel_id]
         save_db(db)
         return jsonify(me_payload(db, user))
 
