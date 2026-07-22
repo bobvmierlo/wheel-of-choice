@@ -2442,13 +2442,16 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     spinBtn.disabled = true;
     wheelHint.textContent = 'Round and round it goes… 🤞';
 
-    // With reduced motion the wheel settles quickly onto its pick instead
-    // of the long dramatic spin — same landing, far less movement.
+    // With reduced motion the wheel takes a shorter, calmer spin instead of
+    // the long dramatic one — but it's still a real, several-turn spin, not a
+    // twitch. (extraTurns must stay well above 0: with 0 the whole spin is
+    // just Math.random()*2π of travel, which is sometimes a near-zero nudge
+    // that looks like the wheel stops after a fraction of a second.)
     const reduce = prefersReducedMotion();
     const startRotation = rotation;
-    const extraTurns = reduce ? 0 : 5 + Math.random() * 3;
+    const extraTurns = reduce ? 3 : 5 + Math.random() * 3;
     const targetRotation = startRotation + extraTurns * Math.PI * 2 + Math.random() * Math.PI * 2;
-    const duration = reduce ? 700 : 4400;
+    const duration = reduce ? 2200 : 4400;
     const startTime = performance.now();
 
     function frame(now) {
