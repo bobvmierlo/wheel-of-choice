@@ -1,0 +1,25 @@
+# Keep the build context small and never bake local state into the image.
+.git
+.github
+data/
+*.log
+
+# Python cruft
+__pycache__/
+*.pyc
+venv/
+.venv/
+.pytest_cache/
+
+# Docs & assets not needed at runtime
+tests/
+screenshots/
+*.md
+LICENSE
+
+# OS / editor cruft
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.swp

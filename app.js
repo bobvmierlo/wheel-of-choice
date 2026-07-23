@@ -280,6 +280,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const adminUpdateBtn = document.getElementById('admin-update-btn');
   const adminVersion = document.getElementById('admin-version');
   const adminUpdateAvailable = document.getElementById('admin-update-available');
+  const adminUpdateHint = document.getElementById('admin-update-hint');
+  const adminUpdateCmd = document.getElementById('admin-update-cmd');
   const adminUpdateDot = document.getElementById('admin-update-dot');
   const updateStatus = document.getElementById('update-status');
   const footerVersion = document.getElementById('footer-version');
@@ -2178,17 +2180,49 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function renderVersion() {
     const v = serverVersion;
-    if (!v || !v.commit) {
+    if (!v) {
       footerVersion.textContent = '';
       adminVersion.textContent = '';
       return;
     }
-    const when = formatDateTime(v.commit_date);
-    footerVersion.textContent = `running ${v.commit} · last updated ${when}`;
-    adminVersion.textContent =
-      `Currently running commit ${v.commit}` +
-      (v.commit_subject ? ` (“${v.commit_subject}”)` : '') +
-      ` · last updated ${when}.`;
+    const ver = v.version && v.version !== 'unknown' ? `v${v.version}` : '';
+    const when = v.commit_date ? formatDateTime(v.commit_date) : '';
+
+    // Footer: prefer the release number; fall back to the commit hash so a
+    // git checkout without a version file still shows something.
+    const footerBits = [];
+    if (ver) footerBits.push(`running ${ver}`);
+    else if (v.commit) footerBits.push(`running ${v.commit}`);
+    if (when) footerBits.push(`last updated ${when}`);
+    footerVersion.textContent = footerBits.join(' · ');
+
+    // Admin panel: the fuller picture — commit detail only matters for a
+    // source checkout; a container is fully described by its version.
+    let line = ver ? `Currently running ${ver}` : 'Currently running';
+    if (v.deployment === 'docker') {
+      line += ' (container).';
+    } else {
+      if (v.commit) {
+        line += ver ? ` · commit ${v.commit}` : ` commit ${v.commit}`;
+        if (v.commit_subject) line += ` (“${v.commit_subject}”)`;
+      }
+      if (when) line += ` · last updated ${when}`;
+      line += '.';
+    }
+    adminVersion.textContent = line;
+
+    applyDeployment(v);
+  }
+
+  function applyDeployment(v) {
+    const docker = !!(v && v.deployment === 'docker');
+    // The git "Update & restart" button only makes sense for a source/systemd
+    // checkout; a container updates by pulling a newer image instead.
+    adminUpdateBtn.hidden = docker;
+    adminUpdateCmd.hidden = !docker;
+    adminUpdateHint.textContent = docker
+      ? '🐳 Container deployment — to update, pull the newer image and recreate the container:'
+      : 'Fetch the latest version from git and restart the server. Needs the updater units from deploy/ installed.';
   }
 
   async function loadVersion() {
@@ -2266,14 +2300,18 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       adminUpdateAvailable.hidden = true;
       return;
     }
+    const docker = info.deployment === 'docker';
+    adminUpdateAvailable.hidden = false;
     if (available) {
-      adminUpdateAvailable.hidden = false;
-      adminUpdateAvailable.textContent =
-        `🆕 A newer version is on git (${info.latest} on ${info.branch}) — `
-        + `you're running ${info.current}. Hit “Update & restart” to pull it.`;
+      adminUpdateAvailable.textContent = docker
+        ? `🆕 Version ${info.latest} is available — you're running ${info.current}. `
+          + 'Pull the new image to update (see below).'
+        : `🆕 A newer version is on git (${info.latest} on ${info.branch}) — `
+          + `you're running ${info.current}. Hit “Update & restart” to pull it.`;
     } else {
-      adminUpdateAvailable.hidden = false;
-      adminUpdateAvailable.textContent = '✅ Up to date with the git remote.';
+      adminUpdateAvailable.textContent = docker
+        ? '✅ Running the latest release.'
+        : '✅ Up to date with the git remote.';
     }
   }
 

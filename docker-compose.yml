@@ -1,0 +1,32 @@
+# Wheel of Choice — one-command deploy.
+#
+#   docker compose up -d        # pull the published image & start it
+#   docker compose logs -f      # watch it
+#   docker compose pull && docker compose up -d   # update to a newer release
+#   docker compose down         # stop (your data stays in the volume)
+#
+# Then open http://<host>:8000
+services:
+  wheel-of-choice:
+    image: ghcr.io/bobvmierlo/wheel-of-choice:latest
+    # On Docker Hub the same image is published as:
+    #   image: bobvmierlo/wheel-of-choice:latest
+    # No published image yet (before the first release)? Build locally instead
+    # by commenting out `image:` above and uncommenting:
+    # build: .
+    container_name: wheel-of-choice
+    ports:
+      - "8000:8000"
+    volumes:
+      - wheel-data:/data
+    restart: unless-stopped
+    # environment:
+    #   # Push notifications — set a real contact address (see README):
+    #   VAPID_SUBJECT: mailto:you@example.com
+    #   # Date-poll defaults (all also tunable live in 🛠️ Admin → Date polls):
+    #   WHEEL_TZ: Europe/Amsterdam
+    #   WHEEL_EVENING_FROM: "17"
+    #   WHEEL_POLL_HORIZON_DAYS: "60"
+
+volumes:
+  wheel-data:
