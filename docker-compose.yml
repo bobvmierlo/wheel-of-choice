@@ -1,16 +1,20 @@
 # Wheel of Choice — one-command deploy.
 #
-#   docker compose up -d        # build & start in the background
+#   docker compose up -d        # pull the published image & start it
 #   docker compose logs -f      # watch it
+#   docker compose pull && docker compose up -d   # update to a newer release
 #   docker compose down         # stop (your data stays in the volume)
 #
 # Then open http://<host>:8000
 services:
   wheel-of-choice:
-    build: .
-    # Prefer a prebuilt image over building locally? Comment out `build:`
-    # above and uncomment this (published on tagged releases):
-    # image: ghcr.io/bobvmierlo/wheel-of-choice:latest
+    image: ghcr.io/bobvmierlo/wheel-of-choice:latest
+    # On Docker Hub the same image is published as:
+    #   image: bobvmierlo/wheel-of-choice:latest
+    # No published image yet (before the first release)? Build locally instead
+    # by commenting out `image:` above and uncommenting:
+    # build: .
+    container_name: wheel-of-choice
     ports:
       - "8000:8000"
     volumes:

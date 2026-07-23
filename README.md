@@ -167,45 +167,61 @@ python3 -m pytest
 
 ## 🐳 Running with Docker
 
-Prefer a container? The repo ships a [`Dockerfile`](Dockerfile) and a
-[`docker-compose.yml`](docker-compose.yml), so the whole app — Flask,
-push notifications and calendar support included — comes up with one
-command:
+Prefer a container? Each [release](https://github.com/bobvmierlo/wheel-of-choice/releases)
+is published as a multi-arch image (amd64 **and** arm64, so it runs on a
+Raspberry Pi) to both **GitHub Container Registry** and **Docker Hub**:
+
+| Registry | Image |
+| --- | --- |
+| GHCR | `ghcr.io/bobvmierlo/wheel-of-choice:latest` |
+| Docker Hub | `bobvmierlo/wheel-of-choice:latest` |
+
+The shipped [`docker-compose.yml`](docker-compose.yml) brings the whole
+app — Flask, push notifications and calendar support included — up with
+one command:
 
 ```bash
 docker compose up -d
 # then open http://<host>:8000
 ```
 
-That builds the image locally, starts it in the background, and stores
-all your accounts, wheels and history in a named `wheel-data` volume so
-they survive `docker compose down`, rebuilds and upgrades. To update,
-`git pull` and `docker compose up -d --build`. Plain Docker works too:
-
-```bash
-docker build -t wheel-of-choice .
-docker run -d -p 8000:8000 -v wheel-data:/data wheel-of-choice
-```
-
-Set any of the [environment knobs](docker-compose.yml) (`VAPID_SUBJECT`
-for push, `WHEEL_TZ` …) with `-e` or the compose `environment:` block,
-and change the published port with the usual `-p 9000:8000`.
-
-**Prebuilt image**: tagging a release (`git tag v3.4.0 && git push
---tags`) runs [`.github/workflows/docker.yml`](.github/workflows/docker.yml),
-which publishes a multi-arch image (amd64 **and** arm64, so it runs on a
-Raspberry Pi) to the GitHub Container Registry. Once that's run once,
-skip the build entirely:
+It stores all your accounts, wheels and history in a named `wheel-data`
+volume, so they survive `docker compose down` and upgrades. Plain Docker
+works too:
 
 ```bash
 docker run -d -p 8000:8000 -v wheel-data:/data \
   ghcr.io/bobvmierlo/wheel-of-choice:latest
 ```
 
-The app still speaks plain HTTP — put it on your home network or behind
-a TLS reverse proxy, not naked on the open internet. Note the in-app
-"Update & restart server" button is for the systemd install below; in a
-container, update by pulling a newer image instead.
+Pin a specific version by swapping `:latest` for a release tag
+(e.g. `:3.1.0`). Set any [environment knob](docker-compose.yml)
+(`VAPID_SUBJECT` for push, `WHEEL_TZ` …) with `-e` or the compose
+`environment:` block, and change the published port with the usual
+`-p 9000:8000`.
+
+**Updating a container**: pull the newer image and recreate —
+`docker compose pull && docker compose up -d`. The admin panel shows the
+running version and flags when a newer release is out, but the in-app
+"Update & restart" button is for the git/systemd install below; a
+container tells you to pull a new image instead.
+
+**Building locally** (e.g. before the first release exists): comment out
+`image:` in the compose file and uncomment `build: .`, or
+`docker build -t wheel-of-choice .`
+
+The app still speaks plain HTTP — put it on your home network or behind a
+TLS reverse proxy, not naked on the open internet.
+
+### Publishing the images (maintainers)
+
+Publishing on each release is automated by
+[`.github/workflows/release.yml`](.github/workflows/release.yml): when you
+publish a GitHub release it writes the tag into
+[`__version__.py`](__version__.py), then builds and pushes the image to
+both registries. GHCR uses the built-in token; Docker Hub needs two repo
+secrets under **Settings → Secrets and variables → Actions**:
+`DOCKERHUB_USERNAME` and a write-scoped `DOCKERHUB_TOKEN`.
 
 ## Deploying to a Linux server
 

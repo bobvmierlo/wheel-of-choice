@@ -28,8 +28,11 @@ RUN useradd --system --uid 10001 wheel \
 USER wheel
 
 # Match the bare-metal defaults; override at run time if you like.
+# WHEEL_DEPLOYMENT tells the app it's containerised, so the admin panel shows
+# "pull a new image to update" instead of the git-pull button.
 ENV HOST=0.0.0.0 \
-    PORT=8000
+    PORT=8000 \
+    WHEEL_DEPLOYMENT=docker
 EXPOSE 8000
 
 HEALTHCHECK --interval=30s --timeout=3s --start-period=5s CMD \

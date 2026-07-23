@@ -77,6 +77,36 @@ except ImportError:
     recurring_ical_events = None
 
 ROOT = Path(__file__).parent.resolve()
+
+# Version number — the single source of truth lives in __version__.py, which
+# the release workflow bumps on every published release.
+try:
+    from __version__ import __version__ as APP_VERSION
+except Exception:  # pragma: no cover — missing/corrupt file shouldn't crash boot
+    APP_VERSION = "unknown"
+
+
+def deployment_type():
+    """How this instance was deployed, which decides how it updates:
+
+      "docker" — the published container image; updates by pulling a newer
+                 image, so the in-app git updater is hidden.
+      "source" — a plain git/systemd checkout; the "Update & restart" button
+                 pulls the branch and restarts (see deploy/).
+
+    An explicit WHEEL_DEPLOYMENT env var wins; otherwise we sniff the two
+    signals the container image leaves behind (Docker's /.dockerenv, and the
+    image pinning WHEEL_DATA_DIR to /data)."""
+    forced = os.environ.get("WHEEL_DEPLOYMENT")
+    if forced:
+        return forced
+    if os.path.exists("/.dockerenv") or os.environ.get("WHEEL_DATA_DIR") == "/data":
+        return "docker"
+    return "source"
+
+
+DEPLOYMENT = deployment_type()
+
 # HOLIDAY_DATA_DIR is the pre-rename name — still honoured so a git pull
 # under an old unit file can't silently start with an empty database
 DATA_DIR = Path(
@@ -303,11 +333,60 @@ def _git(*args, timeout=10):
     return out.stdout.strip() if out.returncode == 0 else None
 
 
-def compute_update_check():
+GITHUB_REPO = "bobvmierlo/wheel-of-choice"
+RELEASES_API_URL = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
+RELEASES_PAGE_URL = f"https://github.com/{GITHUB_REPO}/releases/latest"
+
+
+def _parse_semver(v):
+    """'v3.2.0' → (3, 2, 0). Pads to three parts; () on parse failure so a
+    malformed tag sorts below any real version instead of raising."""
+    parts_str = (v or "").lstrip("v").strip().split(".")
+    try:
+        parts = [int(x) for x in parts_str]
+    except ValueError:
+        return ()
+    while len(parts) < 3:
+        parts.append(0)
+    return tuple(parts)
+
+
+def _release_update_check():
+    """Is a newer GitHub *release* available than the version we're running?
+    Used for container deployments, which have no git checkout to diff — we
+    compare our baked-in APP_VERSION to the latest release tag."""
+    off = {"checked": False, "update_available": False, "deployment": DEPLOYMENT}
+    req = urllib.request.Request(
+        RELEASES_API_URL,
+        headers={
+            "Accept": "application/vnd.github+json",
+            "User-Agent": f"wheel-of-choice/{APP_VERSION}",
+            "X-GitHub-Api-Version": "2022-11-28",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=15) as resp:
+            data = json.loads(resp.read().decode())
+    except (urllib.error.URLError, OSError, ValueError, TimeoutError):
+        return off  # offline, rate-limited, or no releases yet
+    tag = (data.get("tag_name") or "").strip()
+    latest = tag.lstrip("v") or APP_VERSION
+    return {
+        "checked": True,
+        "update_available": _parse_semver(latest) > _parse_semver(APP_VERSION),
+        "current": APP_VERSION,
+        "latest": latest,
+        "release_url": data.get("html_url") or RELEASES_PAGE_URL,
+        "deployment": DEPLOYMENT,
+    }
+
+
+def _git_update_check():
     """Is the tracked branch on the remote ahead of what we're running?
     Compares the local HEAD sha to the remote branch's sha via ls-remote
-    (a lightweight network call — no fetch, nothing written to the repo)."""
-    off = {"checked": False, "update_available": False}
+    (a lightweight network call — no fetch, nothing written to the repo).
+    Used for source/systemd checkouts, where the update button pulls it."""
+    off = {"checked": False, "update_available": False, "deployment": DEPLOYMENT}
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
     local = _git("rev-parse", "HEAD")
     if not branch or not local or branch == "HEAD":
@@ -324,7 +403,16 @@ def compute_update_check():
         "branch": branch,
         "current": local[:9],
         "latest": remote_sha[:9],
+        "deployment": DEPLOYMENT,
     }
+
+
+def compute_update_check():
+    """Whether a newer version is waiting. Containers can't git-pull, so they
+    diff against GitHub releases; source checkouts track their branch."""
+    if DEPLOYMENT == "docker":
+        return _release_update_check()
+    return _git_update_check()
 
 
 def update_check(force=False):
@@ -2028,6 +2116,12 @@ def admin_update():
     with _lock:
         db = load_db()
         require_admin(db)
+        if DEPLOYMENT == "docker":
+            # No git checkout and no systemd updater in a container — updating
+            # means pulling a newer image. The UI hides the button here, so
+            # this only guards a hand-rolled request.
+            abort(400, description="This is a container deployment — update by "
+                  "pulling a newer image (docker compose pull && docker compose up -d).")
         try:
             DATA_DIR.mkdir(parents=True, exist_ok=True)
             UPDATE_FLAG.write_text(datetime.now(timezone.utc).isoformat(), encoding="utf-8")
@@ -2061,6 +2155,8 @@ def version():
     flag file is still waiting to be picked up."""
     return jsonify({
         **GIT_VERSION,
+        "version": APP_VERSION,
+        "deployment": DEPLOYMENT,
         "server_started": SERVER_STARTED,
         "update_pending": UPDATE_FLAG.exists(),
     })

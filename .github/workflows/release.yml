@@ -1,0 +1,119 @@
+# Build and publish the container image on every published GitHub release.
+#
+# Flow (create a release named e.g. `v3.1.0` in the GitHub UI, or
+# `git tag v3.1.0 && git push --tags` then publish it):
+#   1. version — write the release tag into __version__.py and commit to main,
+#                so the image carries the matching number.
+#   2. docker  — build the image from that commit and push it to BOTH
+#                GitHub Container Registry and Docker Hub, for amd64 and arm64
+#                (so it runs on a Raspberry Pi too).
+#
+# Required repository secrets (Settings → Secrets and variables → Actions):
+#   DOCKERHUB_USERNAME  your Docker Hub account name
+#   DOCKERHUB_TOKEN     a Docker Hub access token with write scope
+# GHCR needs no secret — it uses the built-in GITHUB_TOKEN.
+name: Release
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  # ── 1. Bump __version__.py from the release tag ───────────────────
+  version:
+    name: Bump version from tag
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    outputs:
+      sha: ${{ steps.push.outputs.sha }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          persist-credentials: true
+
+      - name: Write version from release tag into __version__.py
+        run: |
+          TAG="${{ github.event.release.tag_name }}"
+          VERSION="${TAG#v}"   # strip a leading 'v' if present
+          python - <<EOF
+          import re, pathlib
+          version = "${VERSION}"
+          p = pathlib.Path("__version__.py")
+          p.write_text(re.sub(
+              r'(__version__\s*=\s*)["\'][^"\']*["\']',
+              f'\\g<1>"{version}"',
+              p.read_text(),
+          ))
+          print(f"__version__.py -> {version}")
+          EOF
+
+      - name: Commit and push
+        id: push
+        run: |
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add __version__.py
+          git diff --cached --quiet \
+            || git commit -m "chore: bump version to ${{ github.event.release.tag_name }} [skip ci]"
+          git push
+          echo "sha=$(git rev-parse HEAD)" >> "$GITHUB_OUTPUT"
+
+  # ── 2. Build and push the image to GHCR + Docker Hub ──────────────
+  docker:
+    name: Build and push image
+    needs: version
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout the version-bumped commit
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.version.outputs.sha }}
+
+      - uses: docker/setup-qemu-action@v3
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Derive image tags
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: |
+            ghcr.io/${{ github.repository }}
+            ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
+          tags: |
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=raw,value=latest
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          platforms: linux/amd64,linux/arm64
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+
+      - name: Sync README to Docker Hub
+        uses: peter-evans/dockerhub-description@v4
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+          repository: ${{ secrets.DOCKERHUB_USERNAME }}/${{ github.event.repository.name }}
