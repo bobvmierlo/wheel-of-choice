@@ -7,4 +7,4 @@ that release carries the matching number. The in-app version display and the
 "update available" check both read from here.
 """
 
-__version__ = "3.0.0"
+__version__ = "1.0.0"

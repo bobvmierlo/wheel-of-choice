@@ -195,7 +195,7 @@ docker run -d -p 8000:8000 -v wheel-data:/data \
 ```
 
 Pin a specific version by swapping `:latest` for a release tag
-(e.g. `:3.1.0`). Set any [environment knob](docker-compose.yml)
+(e.g. `:1.0.0`). Set any [environment knob](docker-compose.yml)
 (`VAPID_SUBJECT` for push, `WHEEL_TZ` …) with `-e` or the compose
 `environment:` block, and change the published port with the usual
 `-p 9000:8000`.
