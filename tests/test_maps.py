@@ -1,5 +1,6 @@
 """Restaurant location search (Google Places) and the place data we keep."""
 from conftest import register, make_restaurant_wheel, make_travel_wheel
+from wheelapp import maps, validation
 
 
 def set_key(admin, key):
@@ -51,7 +52,6 @@ def test_short_query_returns_no_results(client):
 
 
 def test_search_proxies_places(client, monkeypatch):
-    import server
     admin = register(client, "Alice")
     set_key(admin, "AIzaTEST")
 
@@ -63,27 +63,25 @@ def test_search_proxies_places(client, monkeypatch):
         return [{"id": "abc", "name": "Trattoria", "address": "Main St 1, Springfield",
                  "lat": 1.0, "lng": 2.0, "url": "https://maps.google.com/?cid=1"}]
 
-    monkeypatch.setattr(server, "places_text_search", fake_search)
+    monkeypatch.setattr(maps, "places_text_search", fake_search)
     body = admin.get("/api/maps/search?q=trattoria springfield").get_json()
     assert captured == {"query": "trattoria springfield", "api_key": "AIzaTEST"}
     assert body["results"][0]["name"] == "Trattoria"
 
 
 def test_search_reports_upstream_failure(client, monkeypatch):
-    import server
     admin = register(client, "Alice")
     set_key(admin, "AIzaTEST")
 
     def boom(query, api_key):
         raise RuntimeError("network down")
 
-    monkeypatch.setattr(server, "places_text_search", boom)
+    monkeypatch.setattr(maps, "places_text_search", boom)
     assert admin.get("/api/maps/search?q=pizza place").status_code == 502
 
 
 # ── Persisting the chosen place on a restaurant ──────────────────────
 def test_place_persisted_and_used_for_calendar(client):
-    import server
     s = register(client, "Alice")
     wid, _ = make_restaurant_wheel(s)
     place = {"id": "abc", "name": "Trattoria", "address": "Main St 1, Springfield",
@@ -95,20 +93,20 @@ def test_place_persisted_and_used_for_calendar(client):
     assert dest["place"]["id"] == "abc"
     assert dest["place"]["url"] == "https://maps.google.com/?cid=42"
     # the exact place address wins over the free-typed one for the calendar
-    assert server.dest_calendar_location(dest) == "Main St 1, Springfield"
+    assert validation.dest_calendar_location(dest) == "Main St 1, Springfield"
 
 
 def test_clean_place_drops_junk():
-    import server
+    pass
     # a non-https url is dropped; bool "coords" are rejected; only useful keys survive
-    cleaned = server.clean_place({"id": "x", "name": "P", "address": "A st",
+    cleaned = validation.clean_place({"id": "x", "name": "P", "address": "A st",
                                   "url": "javascript:alert(1)", "lat": True, "lng": "nope"})
     assert cleaned["url"] == ""
     assert cleaned["lat"] is None and cleaned["lng"] is None
     assert cleaned["id"] == "x"
     # an empty-ish place collapses to None
-    assert server.clean_place({"url": "https://x"}) is None
-    assert server.clean_place("not a dict") is None
+    assert validation.clean_place({"url": "https://x"}) is None
+    assert validation.clean_place("not a dict") is None
 
 
 def test_travel_destinations_ignore_place(client):

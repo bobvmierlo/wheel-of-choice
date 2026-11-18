@@ -31,7 +31,7 @@ self.addEventListener('push', (event) => {
   // A locked-in dinner date carries a Google Calendar template URL —
   // offer it as an action button. Platforms without action support
   // (iOS among them) simply show the plain notification.
-  if (data.gcal_url) options.actions = [{ action: 'add-to-calendar', title: '📆 Add to calendar' }];
+  if (data.gcal_url) options.actions = [{ action: 'add-to-calendar', title: data.gcal_label || '📆 Add to calendar' }];
   event.waitUntil(self.registration.showNotification(data.title || '🎡 Wheel of Choice', options));
 });
 

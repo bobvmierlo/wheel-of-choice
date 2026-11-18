@@ -1,4 +1,6 @@
 flask>=3.0
+# production web server (server.py falls back to Flask's dev server without it)
+waitress>=3.0
 # optional — only needed for push notifications (see README):
 pywebpush>=2.0
 # optional — only needed for calendar busy/free in date polls (see README):

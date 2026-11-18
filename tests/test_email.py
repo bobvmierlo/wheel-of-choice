@@ -1,5 +1,6 @@
 """E-mail addresses on accounts: setting them, logging in with them."""
 from conftest import register, login
+from wheelapp import accounts
 
 
 def test_register_with_email_and_login_with_it(client):
@@ -71,11 +72,10 @@ def test_admin_sets_email(client):
 
 
 def test_throttle_shared_between_name_and_email(client):
-    import server
     register(client, "Alice", password="correcthorse")
     s = login(client, "Alice", password="correcthorse")
     s.put("/api/me/email", json={"email": "a@example.com", "password": "correcthorse"})
-    for i in range(server.LOGIN_MAX_FAILS):
+    for i in range(accounts.LOGIN_MAX_FAILS):
         ident = "Alice" if i % 2 else "a@example.com"
         client.post("/api/auth/login", json={"login": ident, "password": "nope"})
     r = client.post("/api/auth/login", json={"login": "a@example.com", "password": "correcthorse"})

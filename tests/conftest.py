@@ -5,7 +5,6 @@ never touched. server.py reads its DB path from WHEEL_DATA_DIR at import
 time, so we set that *before* importing the module, then wipe the db file
 (and the in-memory caches) between tests for a clean slate each time.
 """
-import importlib
 import json
 import os
 import sys
@@ -24,19 +23,21 @@ os.environ.pop("VAPID_SUBJECT", None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import server  # noqa: E402
+from wheelapp import accounts, calendars, core, updates
 
 
 @pytest.fixture
 def app():
     """A fresh, empty database for each test."""
-    if server.DB_FILE.exists():
-        server.DB_FILE.unlink()
-    # Reset in-memory caches that outlive a single db.json.
-    server._cal_cache.clear()
-    with server._login_lock:
-        server._login_fails.clear()
-    with server._update_check_lock:
-        server._update_check_cache.update({"at": 0.0, "data": None})
+    wipe_db_files()
+    # Reset in-memory caches that outlive the database.
+    calendars._cal_cache.clear()
+    with accounts._login_lock:
+        accounts._login_fails.clear()
+    with accounts._rate_lock:
+        accounts._rate_hits.clear()
+    with updates._update_check_lock:
+        updates._update_check_cache.update({"at": 0.0, "data": None})
     yield server.app
 
 
@@ -115,6 +116,16 @@ def add_entry(session, wheel_id, name="Test place", travel=False):
 
 
 def write_db(raw):
-    """Drop a raw db dict straight onto disk — for migration tests."""
-    server.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    server.DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
+    """Drop a raw db dict onto disk as an old-style db.json — the next
+    load imports it into SQLite (and migrates it), like a real upgrade."""
+    wipe_db_files()
+    core.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    core.LEGACY_DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
+
+
+def wipe_db_files():
+    """No database at all — a brand-new server."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(core.DB_PATH) + suffix).unlink(missing_ok=True)
+    for path in core.DATA_DIR.glob("db.json*"):
+        path.unlink()

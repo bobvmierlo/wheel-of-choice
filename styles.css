@@ -549,6 +549,8 @@ body {
 .sso-divider { display: flex; align-items: center; gap: 0.6rem; color: var(--text-dim); font-size: 0.82rem; margin: 0; }
 .sso-divider::before, .sso-divider::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: 0.35; }
 .sso-btn { width: 100%; }
+.sso-only .sso-divider { display: none; }
+.setup-restore { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start; }
 .auth-form label {
   display: flex;
   flex-direction: column;
@@ -912,4 +914,20 @@ body {
     transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
   }
+}
+
+/* Language menu — tucked into the header's top-left corner */
+.lang-picker { position: absolute; top: 0.6rem; left: 0.8rem; }
+.lang-picker select {
+  background: rgba(255, 255, 255, 0.06);
+  color: var(--text);
+  border: 1px solid var(--panel-border);
+  border-radius: 8px;
+  padding: 0.2rem 0.4rem;
+  font-size: 0.8rem;
+}
+.lang-picker option { color: #000; }
+.visually-hidden {
+  position: absolute; width: 1px; height: 1px; overflow: hidden;
+  clip: rect(0 0 0 0); white-space: nowrap;
 }

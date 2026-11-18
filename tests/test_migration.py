@@ -4,8 +4,8 @@ A migration bug corrupts real user data silently, so these pin the shape
 transitions the README promises: old space codes keep working, histories
 survive, and pre-account layouts become claimable wheels.
 """
-import server
 from conftest import register, write_db
+from wheelapp import accounts, core, storage
 
 
 def test_v1_flat_layout_becomes_claimable_wheels(client):
@@ -17,12 +17,12 @@ def test_v1_flat_layout_becomes_claimable_wheels(client):
         ],
         "history": [{"id": "h-1", "name": "Rome", "flag": "🇮🇹", "date": "2020-01-01", "by": "old"}],
     })
-    db = server.load_db()
+    db = storage.load_db()
     assert db["version"] == 3
     # the legacy household's holidays wheel carries Rome, unclaimed
     holidays = [w for w in db["wheels"].values() if w["type"] == "holidays"]
     assert any(any(d["name"] == "Rome" for d in w["destinations"]) for w in holidays)
-    assert server.unclaimed_wheel_ids(db)  # nobody holds them yet
+    assert accounts.unclaimed_wheel_ids(db)  # nobody holds them yet
 
     # the first account can adopt them
     s = register(client, "Alice")
@@ -54,7 +54,7 @@ def test_v2_space_splits_into_independent_wheels(client):
             },
         },
     })
-    db = server.load_db()
+    db = storage.load_db()
     assert db["version"] == 3
 
     # Alice now holds two independent wheels
@@ -79,6 +79,9 @@ def test_migration_is_persisted_once(client):
         "destinations": [{"id": "d-1", "name": "Rome", "flag": "🇮🇹"}],
         "history": [],
     })
-    server.load_db()
-    on_disk = server.json.loads(server.DB_FILE.read_text())
+    storage.load_db()
+    on_disk = storage._read_db()  # straight from SQLite, no migration step
     assert on_disk["version"] == 3
+    # the old file was imported and kept aside, not deleted
+    assert not core.LEGACY_DB_FILE.exists()
+    assert (core.DATA_DIR / "db.json.imported").exists()

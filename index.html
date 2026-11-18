@@ -18,6 +18,10 @@
 <body>
 
   <header class="site-header">
+    <label class="lang-picker" id="lang-picker" hidden>
+      <span class="visually-hidden">Language</span>
+      <select id="lang-select" translate="no"></select>
+    </label>
     <div class="account-bar" id="account-bar" hidden>
       <span class="account-name" id="account-name"></span>
       <button type="button" class="btn btn-ghost btn-small" id="admin-btn" hidden>🛠️ Admin<span class="update-dot" id="admin-update-dot" hidden title="A newer version is available">🆕</span></button>
@@ -62,6 +66,14 @@
       <div class="sso-block" id="sso-block" hidden>
         <p class="sso-divider"><span>or</span></p>
         <button type="button" class="btn btn-ghost sso-btn" id="sso-btn">🔐 Log in with SSO</button>
+      </div>
+      <div class="setup-restore" id="setup-restore" hidden>
+        <p class="gate-hint">🆕 This server is brand new. Moving an existing Wheel of Choice
+          here? Restore its backup now — accounts, wheels, settings and the push key all come
+          back, and you log in as before. Or create the first account below to start fresh.</p>
+        <button type="button" class="btn btn-ghost" id="setup-restore-btn">📤 Restore from backup…</button>
+        <input type="file" id="setup-restore-file" accept=".json,application/json" hidden>
+        <p class="update-status" id="setup-restore-status" role="status"></p>
       </div>
       <p class="gate-hint" id="auth-hint">
         New here? Creating an account takes ten seconds — a name, a password and (if you like) your e-mail address.
@@ -177,10 +189,7 @@
   <section class="gate" id="welcome-view" hidden>
     <div class="gate-card onboard-card">
       <h2>Welcome aboard 🎉</h2>
-      <p class="gate-sub">You've joined <span id="welcome-partner"></span>'s wheel
-        <strong id="welcome-wheel"></strong>. Now star the entries <em>you</em> dream of —
-        starred entries get a bigger slice of the wheel, and every extra star from
-        another member 🌟 widens it further.</p>
+      <p class="gate-sub" id="welcome-intro"></p>
       <input type="text" id="welcome-search" class="fav-search" placeholder="🔍 Type to filter the list…" autocomplete="off">
       <div class="fav-picker" id="welcome-picker">
         <div class="segmented" id="welcome-list"></div>
@@ -502,7 +511,7 @@
     </div>
     <h3>Password</h3>
     <p class="manage-hint" id="password-hint">Pick a new password for your account. You'll stay logged in
-      on this device; other devices keep their session too.</p>
+      on this device; other devices are logged out.</p>
     <form id="password-form" class="auth-form">
       <label id="password-current-row">Current password
         <input type="password" id="password-current" autocomplete="current-password" required
@@ -520,6 +529,14 @@
       <p class="push-state" id="password-state" role="status"></p>
       <p class="form-error" id="password-error" role="alert"></p>
     </form>
+    <h3>Logged-in devices</h3>
+    <p class="manage-hint">Everywhere you're logged in right now. Don't recognise one, or lost a
+      phone? Log it out.</p>
+    <ul id="session-list" class="dest-list session-list"></ul>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" id="end-others-btn">Log out all other devices</button>
+    </div>
+    <p class="form-error" id="session-error" role="alert"></p>
   </dialog>
 
   <!-- ── Admin modal ────────────────────────────────────────────────── -->
@@ -610,6 +627,11 @@
         <span class="admin-setting-field"><input type="checkbox" id="sso-allow-signup"></span>
         <span class="admin-setting-hint">Let people without an account here get one by signing on — even when registration is invite-only.</span>
       </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🚫 Password log-in off</span>
+        <span class="admin-setting-field"><input type="checkbox" id="sso-disable-passwords"></span>
+        <span class="admin-setting-hint" id="sso-disable-passwords-hint">Only the sign-on button logs people in; names, e-mails and passwords stop working (people already logged in stay logged in). Needs your own account linked first. If the provider ever breaks, start the server with <code>WHEEL_FORCE_PASSWORD_LOGIN=1</code> to get passwords back.</span>
+      </label>
       <p class="manage-hint">Redirect URI for the provider: <code id="sso-redirect-uri">—</code></p>
       <div class="form-actions">
         <button type="button" class="btn btn-primary btn-small" id="sso-save-btn">Save sign-on settings</button>
@@ -670,15 +692,36 @@
       <p class="update-status" id="maps-key-status" role="status"></p>
     </div>
     <h3>Backup</h3>
-    <p class="manage-hint">Everything — accounts, wheels, history — lives in one
-      <code>db.json</code> on the server. Download a copy now and then; restoring
-      one <strong>replaces all current data</strong>.</p>
+    <p class="manage-hint">One file with <strong>everything</strong>: accounts, wheels,
+      history, settings (sign-on included) and the push-notification key. Restoring it —
+      here, or on the first screen of a brand-new server — brings the whole app back and
+      <strong>replaces all current data</strong>. It contains password hashes and secrets:
+      keep it somewhere safe.</p>
     <div class="form-actions">
       <button type="button" class="btn btn-ghost" id="admin-backup-btn">💾 Download backup</button>
       <button type="button" class="btn btn-ghost" id="admin-restore-btn">📤 Restore from backup…</button>
       <input type="file" id="admin-restore-file" accept=".json,application/json" hidden>
     </div>
     <p class="update-status" id="backup-status" role="status"></p>
+    <h4>Automatic backups</h4>
+    <p class="manage-hint">Every day the server also saves a backup in its data folder
+      (<code>backups/</code>), keeping the newest few. Handy to undo a mistake; they live on the
+      same disk, so still download one now and then.</p>
+    <div class="admin-settings">
+      <label class="admin-setting">
+        <span class="admin-setting-label">🗓️ Keep</span>
+        <span class="admin-setting-field">
+          <input type="number" id="auto-backup-keep" min="0" max="90" step="1" inputmode="numeric">
+          <span class="admin-setting-suffix">daily backups</span>
+        </span>
+        <span class="admin-setting-hint">0 switches automatic backups off.</span>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary btn-small" id="auto-backup-save-btn">Save</button>
+      </div>
+    </div>
+    <ul id="auto-backup-list" class="dest-list"></ul>
+    <p class="update-status" id="auto-backup-status" role="status"></p>
     <h3>Server</h3>
     <p class="manage-hint" id="admin-version"></p>
     <p class="update-available" id="admin-update-available" hidden></p>

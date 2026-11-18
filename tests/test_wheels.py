@@ -1,6 +1,7 @@
 """Wheels: creation, sharing by code, isolation, leaving."""
 from conftest import (register, make_travel_wheel, make_restaurant_wheel,
                       add_entry)
+from wheelapp import polls, storage
 
 
 def test_create_restaurant_wheel_starts_empty(client):
@@ -54,11 +55,10 @@ def test_wheel_not_in_your_list_is_inaccessible(client):
 
 
 def test_leaving_a_solo_wheel_deletes_it(client):
-    import server
     s = register(client, "Alice")
     wid, _ = make_restaurant_wheel(s)
     assert s.post(f"/api/wheels/{wid}/leave").status_code == 200
-    db = server.load_db()
+    db = storage.load_db()
     assert wid not in db["wheels"]
 
 
@@ -87,12 +87,11 @@ def test_travel_destinations_have_no_location(client):
 
 
 def test_dinner_gcal_url_carries_name_address_and_evening():
-    import server
-    url = server.dinner_gcal_url("Trattoria", "Main St 1, Springfield", "2026-08-01")
+    url = polls.dinner_gcal_url("Trattoria", "Main St 1, Springfield", "2026-08-01")
     assert "dates=20260801T190000/20260801T210000" in url
     assert "location=Trattoria%2C%20Main%20St%201%2C%20Springfield" in url
     # without an address the name alone marks the spot
-    bare = server.dinner_gcal_url("Trattoria", "", "2026-08-01")
+    bare = polls.dinner_gcal_url("Trattoria", "", "2026-08-01")
     assert "location=Trattoria" in bare
 
 
@@ -199,7 +198,6 @@ def test_joining_by_code_clears_a_pending_invite(client):
 
 
 def test_leaving_a_shared_wheel_keeps_it_for_others(client):
-    import server
     owner = register(client, "Alice")
     wid, me = make_restaurant_wheel(owner)
     code = next(w["code"] for w in me["wheels"] if w["id"] == wid)
@@ -207,5 +205,5 @@ def test_leaving_a_shared_wheel_keeps_it_for_others(client):
     joiner.post("/api/wheels/join", json={"code": code})
 
     owner.post(f"/api/wheels/{wid}/leave")
-    db = server.load_db()
+    db = storage.load_db()
     assert wid in db["wheels"]  # Bob still holds it

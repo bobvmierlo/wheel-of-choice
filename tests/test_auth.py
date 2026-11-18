@@ -1,5 +1,6 @@
 """Accounts: register, login, sessions."""
-from conftest import Session, register, login
+from conftest import register, login
+from wheelapp import core, storage
 
 
 def test_register_returns_token_and_me(client):
@@ -51,13 +52,12 @@ def test_logout_invalidates_token(client):
 
 
 def test_expired_session_is_rejected(client):
-    import server
     s = register(client, "Alice")
     # age the session past the TTL by rewriting its created stamp
-    db = server.load_db()
+    db = storage.load_db()
     (tok,) = [t for t, sess in db["sessions"].items() if sess["user"] == s.user_id]
     from datetime import datetime, timedelta, timezone
-    old = (datetime.now(timezone.utc) - timedelta(days=server.SESSION_TTL_DAYS + 1)).isoformat()
+    old = (datetime.now(timezone.utc) - timedelta(days=core.SESSION_TTL_DAYS + 1)).isoformat()
     db["sessions"][tok]["created"] = old
-    server.save_db(db)
+    storage.save_db(db)
     assert s.get("/api/me").status_code == 401

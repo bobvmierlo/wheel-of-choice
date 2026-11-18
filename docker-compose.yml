@@ -32,6 +32,8 @@ services:
     #   WHEEL_OIDC_ISSUER: https://auth.example.com/application/o/wheel/
     #   WHEEL_OIDC_CLIENT_ID: ...
     #   WHEEL_OIDC_CLIENT_SECRET: ...
+    #   # Break-glass: passwords work again even if an admin switched them off
+    #   WHEEL_FORCE_PASSWORD_LOGIN: "1"
 
 volumes:
   wheel-data:

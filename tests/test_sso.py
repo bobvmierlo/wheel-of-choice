@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-import server
 from conftest import register, login
+from wheelapp import oidc
 
 ISSUER = "https://auth.example.com/application/o/wheel/"
 
@@ -46,10 +46,10 @@ class FakeIdP:
 @pytest.fixture
 def idp(monkeypatch):
     fake = FakeIdP()
-    monkeypatch.setattr(server, "_oidc_http", fake)
-    server._oidc_discovery.clear()
-    server._oidc_pending.clear()
-    server._oidc_handoffs.clear()
+    monkeypatch.setattr(oidc, "_oidc_http", fake)
+    oidc._oidc_discovery.clear()
+    oidc._oidc_pending.clear()
+    oidc._oidc_handoffs.clear()
     return fake
 
 
@@ -88,7 +88,7 @@ def test_config_reports_sso(client, idp):
     assert "client_secret" not in view and view["client_secret_set"] is True
     assert view["redirect_uri"].endswith("/api/auth/oidc/callback")
     cfg = client.get("/api/config").get_json()["sso"]
-    assert cfg == {"enabled": True, "label": "Log in with Authentik"}
+    assert cfg == {"enabled": True, "label": "Log in with Authentik", "password_login": True}
 
 
 def test_existing_user_matched_by_verified_email(client, idp):
@@ -245,3 +245,77 @@ def test_admin_test_endpoint(client, idp):
     configure(admin)
     r = admin.post("/api/admin/sso/test")
     assert r.status_code == 200 and r.get_json()["issuer"] == ISSUER
+
+
+# ── Switching password log-in off ────────────────────────────────────
+def _linked_admin(client, idp):
+    """Admin account linked to SSO, plus a password-only second user."""
+    admin = register(client, "Alice")
+    configure(admin)
+    admin.put("/api/me/email", json={"email": "alice@example.com", "password": "secret12"})
+    out = sso(client, idp, {"sub": "ak-alice", "email": "alice@example.com", "email_verified": True})
+    finish(client, out["sso"])
+    return admin
+
+
+def test_disable_needs_sso_and_linked_admin(client, idp):
+    admin = register(client, "Alice")
+    # no SSO configured yet
+    r = admin.put("/api/admin/sso", json={"disable_password_login": True})
+    assert "single sign-on first" in r.get_json()["warning"]
+    assert r.get_json()["disable_password_login"] is False
+    # admin not linked → would lock themselves out; the other fields still save
+    r = admin.put("/api/admin/sso", json={
+        "issuer": ISSUER, "client_id": "wheel-client", "client_secret": "s3cret",
+        "disable_password_login": True})
+    view = r.get_json()
+    assert "link your own account" in view["warning"]
+    assert view["enabled"] is True and view["disable_password_login"] is False
+
+
+def test_password_login_off_blocks_password_routes(client, idp):
+    admin = _linked_admin(client, idp)
+    bob = register(client, "Bob")
+    view = admin.put("/api/admin/sso", json={"disable_password_login": True}).get_json()
+    assert view["password_login"] is False and view["unlinked_users"] == ["Bob"]
+    cfg = client.get("/api/config").get_json()
+    assert cfg["password_login"] is False and cfg["sso"]["password_login"] is False
+    assert client.post("/api/auth/login",
+                       json={"login": "Bob", "password": "secret12"}).status_code == 403
+    assert client.post("/api/auth/register",
+                       json={"name": "Carol", "password": "secret12"}).status_code == 403
+    assert bob.put("/api/me/password",
+                   json={"current": "secret12", "new": "another12"}).status_code == 403
+    assert admin.put(f"/api/admin/users/{bob.user_id}/password",
+                     json={"new": "another12"}).status_code == 403
+    assert admin.post("/api/me/sso/unlink").status_code == 400
+    # existing sessions keep working
+    assert bob.get("/api/me").status_code == 200
+    # SSO still logs people in
+    out = sso(client, idp, {"sub": "ak-alice"})
+    assert finish(client, out["sso"])["me"]["user"]["name"] == "Alice"
+
+
+def test_password_login_fails_open_without_sso(client, idp):
+    admin = _linked_admin(client, idp)
+    admin.put("/api/admin/sso", json={"disable_password_login": True})
+    assert client.post("/api/auth/login",
+                       json={"login": "Alice", "password": "secret12"}).status_code == 403
+    admin.put("/api/admin/sso", json={"clear_secret": True})  # SSO no longer configured
+    assert login(client, "Alice")
+
+
+def test_force_env_var_restores_password_login(client, idp, monkeypatch):
+    admin = _linked_admin(client, idp)
+    admin.put("/api/admin/sso", json={"disable_password_login": True})
+    monkeypatch.setenv("WHEEL_FORCE_PASSWORD_LOGIN", "1")
+    assert login(client, "Alice")
+    view = admin.get("/api/admin/sso").get_json()
+    assert view["password_login_forced"] is True and view["password_login"] is True
+
+
+def test_sso_signup_still_works_with_passwords_off(client, idp):
+    admin = _linked_admin(client, idp)
+    admin.put("/api/admin/sso", json={"disable_password_login": True, "allow_signup": True})
+    out = sso(client, idp, {"sub": "ak-new", "preferred_username": "newbie"})
+    assert finish(client, out["sso"])["me"]["user"]["name"] == "newbie"
