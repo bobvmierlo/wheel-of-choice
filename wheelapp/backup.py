@@ -14,7 +14,7 @@ from .core import (
     app,
     webpush,
 )
-from . import accounts, admin_api, calendars, core, oidc, push, storage
+from . import i18n, accounts, admin_api, calendars, core, oidc, push, storage
 
 
 # ── Backup & restore ─────────────────────────────────────────────────
@@ -79,7 +79,7 @@ def parse_backup(payload):
                 continue  # unknown extras are ignored, never written
             if not isinstance(text, str) or len(text) > MAX_BACKUP_FILE_CHARS \
                     or not _looks_like_private_key(text):
-                abort(400, description=f"the {name} in that backup is damaged")
+                abort(400, description=i18n.msg('the {name} in that backup is damaged', name=name))
             files[name] = text
         payload = payload.get("db")
     if not isinstance(payload, dict) or not all(

@@ -18,7 +18,7 @@ from .core import (
     app,
     settings_view,
 )
-from . import accounts, storage
+from . import i18n, accounts, storage
 
 
 # ── Single sign-on (OpenID Connect, e.g. Authentik) ──────────────────
@@ -51,7 +51,7 @@ OIDC_TIMEOUT = 10
 OIDC_MAX_BYTES = 1_000_000
 OIDC_MAX_PENDING = 500     # cap on in-flight logins, so they can't pile up
 OIDC_CALLBACK_PATH = "/api/auth/oidc/callback"
-OIDC_DEFAULT_LABEL = "Log in with SSO"
+OIDC_DEFAULT_LABEL = i18n.msg("Log in with SSO")  # translated where shown
 # Binds a started login to the browser that started it. Without it,
 # someone could start a flow and talk somebody else into finishing it —
 # logging the victim into the attacker's account, or (worse) linking the
@@ -127,6 +127,8 @@ def oidc_settings_view(db):
     cfg = oidc_settings(db)
     view = {k: v for k, v in cfg.items() if k != "client_secret"}
     view["client_secret_set"] = bool(cfg["client_secret"])
+    # only what the admin typed; the panel shows the default as a placeholder
+    view["button_label"] = str(((db.get("settings") or {}).get("oidc") or {}).get("button_label") or "")
     view["redirect_uri"] = oidc_redirect_uri(cfg)
     view["linked_users"] = sum(1 for u in db["users"].values() if u.get("oidc_sub"))
     view["unlinked_users"] = sorted(u["name"] for u in db["users"].values() if not u.get("oidc_sub"))
@@ -155,10 +157,11 @@ def _oidc_http(url, data=None, headers=None):
             detail = json.loads(err.read(4096)).get("error_description") or ""
         except Exception:
             pass
-        raise ValueError(f"the identity provider answered {err.code}"
-                         + (f": {detail}" if detail else "")) from None
+        raise ValueError(
+            i18n.msg("the identity provider answered {code}: {detail}", code=err.code, detail=detail)
+            if detail else i18n.msg("the identity provider answered {code}", code=err.code)) from None
     except (urllib.error.URLError, OSError) as err:
-        raise ValueError(f"can't reach the identity provider ({getattr(err, 'reason', err)})") from None
+        raise ValueError(i18n.msg("can't reach the identity provider ({reason})", reason=getattr(err, 'reason', err))) from None
     if len(raw) > OIDC_MAX_BYTES:
         raise ValueError("the identity provider sent an oversized response")
     try:
@@ -182,10 +185,9 @@ def oidc_discover(issuer, fresh=False):
     meta = _oidc_http(issuer.rstrip("/") + "/.well-known/openid-configuration")
     for key in ("issuer", "authorization_endpoint", "token_endpoint"):
         if not isinstance(meta.get(key), str) or not meta[key]:
-            raise ValueError(f"the provider's metadata has no {key}")
+            raise ValueError(i18n.msg("the provider's metadata has no {key}", key=key))
     if meta["issuer"].rstrip("/") != issuer.rstrip("/"):
-        raise ValueError(f"the provider calls itself {meta['issuer']} — "
-                         "put exactly that in the issuer field")
+        raise ValueError(i18n.msg('the provider calls itself {issuer} — put exactly that in the issuer field', issuer=meta['issuer']))
     with _oidc_lock:
         _oidc_discovery[issuer] = {"at": now, "data": meta}
     return meta
@@ -285,6 +287,7 @@ def _prune_oidc(now):
 
 def _sso_bounce(**params):
     """Back to the app, with the outcome in the query string."""
+    params = {k: i18n.t(v) for k, v in params.items()}  # errors in the user's language
     resp = redirect("/?" + urlencode(params), code=302)
     resp.delete_cookie(OIDC_COOKIE, path="/api/auth/oidc")
     return resp
@@ -309,7 +312,7 @@ def oidc_start():
     try:
         meta = oidc_discover(cfg["issuer"])
     except ValueError as err:
-        abort(502, description=str(err))
+        abort(502, description=i18n.reason(err))
     state = secrets.token_urlsafe(24)
     nonce = secrets.token_urlsafe(24)
     verifier = secrets.token_urlsafe(48)
@@ -363,7 +366,7 @@ def oidc_callback():
         return _sso_bounce(sso_error="this sign-in was started in another browser — start it again here")
     if request.args.get("error"):
         reason = request.args.get("error_description") or request.args.get("error")
-        return _sso_bounce(sso_error=f"the identity provider said no: {reason[:200]}")
+        return _sso_bounce(sso_error=i18n.msg('the identity provider said no: {reason}', reason=reason[:200]))
     with _lock:
         cfg = oidc_settings(storage.load_db())
     if not cfg["enabled"]:
@@ -371,7 +374,7 @@ def oidc_callback():
     try:
         claims = oidc_exchange(cfg, pending, request.args.get("code", ""))
     except ValueError as err:
-        return _sso_bounce(sso_error=str(err))
+        return _sso_bounce(sso_error=i18n.reason(err))
     sub = claims["sub"]
     email = str(claims.get("email") or "").strip().lower()
     if email and (len(email) > accounts.MAX_EMAIL_LEN or not accounts.EMAIL_RE.match(email)):
@@ -385,7 +388,7 @@ def oidc_callback():
             if user is None:
                 return _sso_bounce(sso_error="your account is gone — log in again")
             if owner is not None and owner["id"] != user["id"]:
-                return _sso_bounce(sso_error=f"that sign-on identity is already linked to {owner['name']}")
+                return _sso_bounce(sso_error=i18n.msg('that sign-on identity is already linked to {owner}', owner=owner['name']))
             user["oidc_sub"] = sub
             if not user.get("email") and email and not accounts.user_by_email(db, email):
                 user["email"] = email
@@ -398,13 +401,10 @@ def oidc_callback():
             if match is not None:
                 if match.get("oidc_sub"):
                     return _sso_bounce(sso_error=(
-                        f"the account with {email} is linked to a different sign-on identity — "
-                        "ask an admin to unlink it"))
+                        i18n.msg('the account with {email} is linked to a different sign-on identity — ask an admin to unlink it', email=email)))
                 if cfg["require_verified_email"] and not email_is_verified(claims):
                     return _sso_bounce(sso_error=(
-                        f"an account with {email} exists, but the identity provider doesn't "
-                        "vouch that the address is verified — log in with your password and "
-                        "link sign-on from your account settings instead"))
+                        i18n.msg("an account with {email} exists, but the identity provider doesn't vouch that the address is verified — log in with your password and link sign-on from your account settings instead", email=email)))
                 user = match
                 user["oidc_sub"] = sub
         if user is None:
@@ -416,8 +416,7 @@ def oidc_callback():
             if not allowed:
                 who = email or claims.get("preferred_username") or "this identity"
                 return _sso_bounce(sso_error=(
-                    f"there's no account here for {who} — ask an admin to add your e-mail "
-                    "address to your account, or for an invite"))
+                    i18n.msg("there's no account here for {who} — ask an admin to add your e-mail address to your account, or for an invite", who=who)))
             free_email = email if email and not accounts.user_by_email(db, email) else ""
             user = accounts.new_user(db, sso_display_name(db, claims), email=free_email, wheel=wheel)
             user["oidc_sub"] = sub

@@ -8,7 +8,7 @@ from .core import (
     _lock,
     app,
 )
-from . import accounts, polls, push, seeding, storage, validation
+from . import i18n, accounts, polls, push, seeding, storage, validation
 
 
 # ── Destinations API ─────────────────────────────────────────────────
@@ -30,14 +30,14 @@ def create_destination(wheel_id):
                 request.get_json(force=True, silent=True), travel=storage.is_travel(wheel)
             )
         except ValueError as err:
-            abort(400, description=str(err))
+            abort(400, description=i18n.reason(err))
         wheel["destinations"].append(dest)
         storage.save_db(db)
         label = " ".join(part for part in (dest.get("flag", ""), dest["name"]) if part)
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-            f"➕ {user['name']} added {label}",
-            f"Fresh on {wheel['name']} — worth a star? ⭐",
+            i18n.msg('➕ {user} added {label}', user=user['name'], label=label),
+            i18n.msg('Fresh on {wheel} — worth a star? ⭐', wheel=wheel['name']),
             wheel,
             tag=f"{wheel['id']}-add",  # don't overwrite a spin waiting for a thumbs-up
         )
@@ -76,8 +76,9 @@ def sync_catalog(wheel_id):
             on = sum(1 for d in added if d["enabled"])
             push.push_to_users(
                 [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-                f"🌍 {user['name']} added {len(added)} new place(s) to {wheel['name']}",
-                f"Fresh from the catalogue{f' — {on} already on the wheel' if on else ''} ⭐",
+                i18n.msg('🌍 {user} added {count} new place(s) to {wheel}', user=user['name'], count=len(added), wheel=wheel['name']),
+                i18n.msg("Fresh from the catalogue — {count} already on the wheel ⭐", count=on)
+                if on else "Fresh from the catalogue ⭐",
                 wheel,
                 tag=f"{wheel['id']}-add",
             )
@@ -100,7 +101,7 @@ def update_destination(wheel_id, dest_id):
                 try:
                     updated = validation.clean_destination(payload, existing=dest, travel=storage.is_travel(wheel))
                 except ValueError as err:
-                    abort(400, description=str(err))
+                    abort(400, description=i18n.reason(err))
                 if starred is not None:
                     stars = set(updated["starred_by"])
                     stars.add(user["id"]) if starred else stars.discard(user["id"])

@@ -1,3 +1,5 @@
+import { N_ } from './i18n.js';
+
 /* Wheel of Choice — shared constant tables.
  *
  * Pure data with no state and no DOM: the label lookups, the wheel-type
@@ -7,22 +9,22 @@
  */
 
 export const VIBE_LABELS = {
-  nature: '🌲 nature', culture: '🏛️ culture & museums', food: '🍽️ food',
-  beach: '🏖️ beach', nightlife: '🌃 nightlife', adventure: '🧗 adventure',
-  wellness: '💆 wellness', winter: '⛷️ snow',
+  nature: N_('🌲 nature'), culture: N_('🏛️ culture & museums'), food: N_('🍽️ food'),
+  beach: N_('🏖️ beach'), nightlife: N_('🌃 nightlife'), adventure: N_('🧗 adventure'),
+  wellness: N_('💆 wellness'), winter: N_('⛷️ snow'),
 };
 
-export const BUDGET_LABELS = { low: '💶 low budget', mid: '💶💶 mid budget', high: '💶💶💶 high budget' };
+export const BUDGET_LABELS = { low: N_('💶 low budget'), mid: N_('💶💶 mid budget'), high: N_('💶💶💶 high budget') };
 
-export const DISTANCE_LABELS = { regional: '🚗 regional', europe: '✈️ Europe', longhaul: '🌏 long-haul' };
+export const DISTANCE_LABELS = { regional: N_('🚗 regional'), europe: N_('✈️ Europe'), longhaul: N_('🌏 long-haul') };
 
 // Filter groups that accept several values at once ('party' stays single-choice).
 export const MULTI_FILTERS = ['budget', 'distance', 'vibe', 'season'];
 
 export const WHEEL_TYPE_META = {
-  holidays: { icon: '🌍', kicker: 'Your next holiday is…', noun: 'destination' },
-  citytrips: { icon: '🏙️', kicker: 'Your next city trip is…', noun: 'destination' },
-  restaurants: { icon: '🍽️', kicker: 'Tonight you\'re eating at…', noun: 'restaurant' },
+  holidays: { icon: '🌍', kicker: N_('Your next holiday is…'), noun: 'destination' },
+  citytrips: { icon: '🏙️', kicker: N_('Your next city trip is…'), noun: 'destination' },
+  restaurants: { icon: '🍽️', kicker: N_('Tonight you\'re eating at…'), noun: 'restaurant' },
 };
 
 // Stars are per person (starred_by). One star doubles a wheel segment;

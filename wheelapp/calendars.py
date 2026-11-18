@@ -21,7 +21,7 @@ from .core import (
     app,
     recurring_ical_events,
 )
-from . import accounts, core, storage
+from . import i18n, accounts, core, storage
 
 
 # ── Calendar availability (secret ICS feeds) ─────────────────────────
@@ -228,7 +228,7 @@ def add_calendar():
     try:
         busy = cached_busy_fresh(url)
     except Exception as err:
-        abort(400, description=f"couldn't read that calendar — {err}")
+        abort(400, description=i18n.msg("couldn't read that calendar — {reason}", reason=i18n.reason(err)))
     with _lock:
         db = storage.load_db()
         user = accounts.current_user(db)
@@ -236,7 +236,7 @@ def add_calendar():
         if any(f["url"] == url for f in feeds):
             abort(409, description="you've already linked that calendar")
         if len(feeds) >= MAX_ICS_FEEDS:
-            abort(400, description=f"{MAX_ICS_FEEDS} calendars is the limit — remove one first")
+            abort(400, description=i18n.msg('{max} calendars is the limit — remove one first', max=MAX_ICS_FEEDS))
         feed = {"id": "c-" + uuid.uuid4().hex[:8], "label": label, "url": url}
         feeds.append(feed)
         storage.save_db(db)

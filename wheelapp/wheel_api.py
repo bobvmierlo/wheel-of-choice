@@ -13,7 +13,7 @@ from .core import (
     _lock,
     app,
 )
-from . import accounts, push, seeding, storage
+from . import i18n, accounts, push, seeding, storage
 
 
 # ── Wheels (create / join / leave / claim) ───────────────────────────
@@ -185,7 +185,7 @@ def invite_to_wheel(wheel_id):
             for target in invited:
                 push.push_to_users(
                     [target],
-                    f"🎡 {user['name']} shared {wheel['name']} with you",
+                    i18n.msg('🎡 {user} shared {wheel} with you', user=user['name'], wheel=wheel['name']),
                     "Tap to accept and start spinning together!",
                     wheel,
                     tag=f"{wheel_id}-invite",
@@ -221,7 +221,7 @@ def accept_invite(wheel_id):
         storage.save_db(db)
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel_id) if u["id"] != user["id"]],
-            f"🎉 {user['name']} joined {wheel['name']}",
+            i18n.msg('🎉 {user} joined {wheel}', user=user['name'], wheel=wheel['name']),
             "Say hi — and give the wheel a spin together!",
             wheel,
             tag=f"{wheel_id}-joined",

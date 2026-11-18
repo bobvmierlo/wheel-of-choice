@@ -16,7 +16,7 @@ from .core import (
     app,
     webpush,
 )
-from . import accounts, storage
+from . import i18n, accounts, storage
 
 
 # ── Push notifications (Web Push / VAPID) ────────────────────────────
@@ -100,27 +100,32 @@ def push_to_users(users, title, body, wheel, tag=None, gcal_url=None, url=None):
     notification)."""
     if webpush is None or vapid_public_key() is None:
         return  # the call also guarantees the key file exists before delivery reads it
-    targets = [
-        (u["id"], {"endpoint": s["endpoint"], "keys": dict(s["keys"])})
-        for u in users for s in u.get("push_subs", [])
-    ]
+    # title/body may be i18n Msgs: each recipient gets them in their language
+    targets = []
+    for u in users:
+        if not u.get("push_subs"):
+            continue
+        lang = u.get("lang") or ""
+        data = {
+            "title": i18n.tr(title, lang),
+            "body": i18n.tr(body, lang),
+            "tag": tag or wheel["id"],
+            "url": url or f"/#{wheel['id']}",
+        }
+        if gcal_url:
+            data["gcal_url"] = gcal_url
+            data["gcal_label"] = i18n.tr("📆 Add to calendar", lang)
+        payload = json.dumps(data, ensure_ascii=False)
+        targets += [(u["id"], {"endpoint": s["endpoint"], "keys": dict(s["keys"])}, payload)
+                    for s in u["push_subs"]]
     if not targets:
         return
-    data = {
-        "title": title,
-        "body": body,
-        "tag": tag or wheel["id"],
-        "url": url or f"/#{wheel['id']}",
-    }
-    if gcal_url:
-        data["gcal_url"] = gcal_url
-    payload = json.dumps(data, ensure_ascii=False)
-    threading.Thread(target=_deliver_pushes, args=(targets, payload), daemon=True).start()
+    threading.Thread(target=_deliver_pushes, args=(targets,), daemon=True).start()
 
 
-def _deliver_pushes(targets, payload):
+def _deliver_pushes(targets):
     dead = []
-    for user_id, sub in targets:
+    for user_id, sub, payload in targets:
         try:
             webpush(
                 subscription_info=sub,

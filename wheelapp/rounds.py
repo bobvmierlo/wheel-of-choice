@@ -9,7 +9,7 @@ from .core import (
     _lock,
     app,
 )
-from . import accounts, polls, push, storage, validation
+from . import i18n, accounts, polls, push, storage, validation
 
 
 # ── Rounds (shared vetoes + pending pick, travel wheels only) ────────
@@ -101,8 +101,8 @@ def veto_destination(wheel_id):
         if shot_down:
             push.push_to_users(
                 [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-                f"🙅 {user['name']} vetoed {shot_down['flag']} {shot_down['name']}",
-                f"Back to square one on {wheel['name']} — give it another spin!",
+                i18n.msg('🙅 {user} vetoed {flag} {dest}', user=user['name'], flag=shot_down['flag'], dest=shot_down['name']),
+                i18n.msg('Back to square one on {wheel} — give it another spin!', wheel=wheel['name']),
                 wheel,
             )
         return jsonify(round_payload(db, user, wheel))
@@ -144,8 +144,8 @@ def propose_pick(wheel_id):
                 storage.save_db(db)
                 push.push_to_users(
                     pending_blockers(db, wheel, rnd),
-                    f"🎡 {user['name']} spun {dest['flag']} {dest['name']}",
-                    f"{wheel['name']}: are you in — or is this your veto?",
+                    i18n.msg('🎡 {user} spun {flag} {dest}', user=user['name'], flag=dest['flag'], dest=dest['name']),
+                    i18n.msg('{wheel}: are you in — or is this your veto?', wheel=wheel['name']),
                     wheel,
                 )
                 return jsonify({"final": False, "round": round_payload(db, user, wheel)})
@@ -153,9 +153,9 @@ def propose_pick(wheel_id):
         storage.save_db(db)
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-            f"🎉 {dest['flag']} {dest['name']} it is!",
-            f"{user['name']} spun {wheel['name']} — time to book! 🧳" if storage.is_travel(wheel)
-            else f"{user['name']} spun {wheel['name']} — enjoy your meal! 🍽️",
+            i18n.msg('🎉 {flag} {dest} it is!', flag=dest['flag'], dest=dest['name']),
+            i18n.msg('{user} spun {wheel} — time to book! 🧳', user=user['name'], wheel=wheel['name']) if storage.is_travel(wheel)
+            else i18n.msg('{user} spun {wheel} — enjoy your meal! 🍽️', user=user['name'], wheel=wheel['name']),
             wheel,
         )
         return jsonify({
@@ -191,8 +191,8 @@ def confirm_pick(wheel_id):
             spinner = db["users"].get(pending["by"])
             push.push_to_users(
                 [spinner] if spinner else [],
-                f"👍 {user['name']} is in for {pending['flag']} {pending['name']}",
-                f"Still waiting for {' & '.join(sorted(u['name'] for u in blockers))} · {wheel['name']}",
+                i18n.msg('👍 {user} is in for {flag} {dest}', user=user['name'], flag=pending['flag'], dest=pending['name']),
+                i18n.msg('Still waiting for {names} · {wheel}', names=' & '.join(sorted(u['name'] for u in blockers)), wheel=wheel['name']),
                 wheel,
             )
             return jsonify({"final": False, "round": round_payload(db, user, wheel)})
@@ -200,8 +200,8 @@ def confirm_pick(wheel_id):
         storage.save_db(db)
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-            f"🎉 {pending['flag']} {pending['name']} it is!",
-            f"Everyone's in on {wheel['name']} — time to book! 🧳",
+            i18n.msg('🎉 {flag} {dest} it is!', flag=pending['flag'], dest=pending['name']),
+            i18n.msg("Everyone's in on {wheel} — time to book! 🧳", wheel=wheel['name']),
             wheel,
         )
         return jsonify({

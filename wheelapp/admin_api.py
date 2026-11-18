@@ -14,7 +14,7 @@ from .core import (
     clean_timezone,
     settings_view,
 )
-from . import accounts, calendars, oidc, storage
+from . import i18n, accounts, calendars, oidc, storage
 
 
 # ── Admin ────────────────────────────────────────────────────────────
@@ -184,7 +184,7 @@ def admin_reset_password(user_id):
     payload = request.get_json(force=True, silent=True) or {}
     new_password = str(payload.get("new", ""))
     if len(new_password) < accounts.MIN_PASSWORD_LEN:
-        abort(400, description=f"pick a password of at least {accounts.MIN_PASSWORD_LEN} characters")
+        abort(400, description=i18n.msg('pick a password of at least {min} characters', min=accounts.MIN_PASSWORD_LEN))
     with _lock:
         db = storage.load_db()
         require_admin(db)
@@ -257,7 +257,7 @@ def admin_put_sso():
                 if key in ("issuer", "public_url") and value:
                     parsed = urlparse(value)
                     if parsed.scheme not in ("http", "https") or not parsed.netloc:
-                        abort(400, description=f"the {key.replace('_', ' ')} must be an http(s):// address")
+                        abort(400, description=i18n.msg('the {field} must be an http(s):// address', field=key.replace('_', ' ')))
                     if key == "public_url":
                         value = value.rstrip("/")
                 stored[key] = value
@@ -276,16 +276,16 @@ def admin_put_sso():
                 # way that locks out the admin flipping the switch. The rest
                 # of the form still saves — only this switch stays put.
                 if not oidc.oidc_settings(db)["enabled"]:
-                    warning = ("password log-in stays on: set up single sign-on first "
+                    warning = i18n.msg("password log-in stays on: set up single sign-on first "
                                "(issuer, client ID and secret)")
                 elif not admin.get("oidc_sub"):
-                    warning = ("password log-in stays on: link your own account to single "
+                    warning = i18n.msg("password log-in stays on: link your own account to single "
                                "sign-on first (🔑 → Single sign-on → Link) — otherwise you'd "
                                "lock yourself out")
             if not warning:
                 stored["disable_password_login"] = disable
         storage.save_db(db)
-        return jsonify({**oidc.oidc_settings_view(db), "warning": warning})
+        return jsonify({**oidc.oidc_settings_view(db), "warning": i18n.t(warning) if warning else ""})
 
 
 @app.post("/api/admin/sso/test")
@@ -301,7 +301,7 @@ def admin_test_sso():
     try:
         meta = oidc.oidc_discover(cfg["issuer"], fresh=True)
     except ValueError as err:
-        abort(502, description=str(err))
+        abort(502, description=i18n.reason(err))
     return jsonify({"ok": True, "issuer": meta["issuer"],
                     "authorization_endpoint": meta["authorization_endpoint"]})
 
@@ -319,7 +319,7 @@ def admin_unshare(user_id):
         shared = [wid for wid in target.get("wheels", [])
                   if len(accounts.wheel_member_users(db, wid)) > 1]
         if not shared:
-            abort(400, description=f"{target['name']} isn't sharing any wheels")
+            abort(400, description=i18n.msg("{target} isn't sharing any wheels", target=target['name']))
         target["wheels"] = [wid for wid in target["wheels"] if wid not in shared]
         for wid in shared:
             target.get("prefs", {}).pop(wid, None)

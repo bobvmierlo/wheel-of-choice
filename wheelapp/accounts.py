@@ -21,7 +21,7 @@ from .core import (
     app,
     settings_view,
 )
-from . import oidc, storage
+from . import i18n, oidc, storage
 
 
 # ── Accounts ─────────────────────────────────────────────────────────
@@ -224,7 +224,7 @@ def hash_legacy_sessions(db):
 
 
 def device_label(user_agent):
-    """'Safari on iPhone'-style label for a session — just enough to tell
+    """'Safari · iPhone'-style label for a session — just enough to tell
     your own devices apart, nothing more is kept."""
     ua = user_agent or ""
     if "iPhone" in ua:
@@ -250,7 +250,7 @@ def device_label(user_agent):
     else:
         browser = ""
     if browser and os_name:
-        return f"{browser} on {os_name}"
+        return f"{browser} · {os_name}"
     return browser or os_name or "Unknown device"
 
 
@@ -276,6 +276,11 @@ def current_user(db):
         stale = True
     if stale:
         session["last_seen"] = now.isoformat()
+    lang = i18n.request_lang()
+    relang = bool(lang) and lang != user.get("lang")
+    if relang:
+        user["lang"] = lang  # push notifications go out in this language
+    if stale or relang:
         storage.save_db(db)
     return user
 
@@ -328,7 +333,7 @@ def rate_limit(action):
             _rate_hits[key] = hits
             if len(hits) >= cap:
                 wait = int(window - (now - hits[0])) + 1
-                abort(429, description=f"too many attempts — try again in about {max(1, wait // 60)} min")
+                abort(429, description=i18n.msg('too many attempts — try again in about {minutes} min', minutes=max(1, wait // 60)))
         for key in ((action, addr), (action, "*")):
             _rate_hits[key].append(now)
 
@@ -423,7 +428,7 @@ def me_payload(db, user):
 
 def sso_public(db):
     cfg = oidc.oidc_settings(db)
-    return {"enabled": cfg["enabled"], "label": cfg["button_label"],
+    return {"enabled": cfg["enabled"], "label": i18n.t(cfg["button_label"]),
             "password_login": oidc.password_login_allowed(db)}
 
 
@@ -463,7 +468,7 @@ def register():
     check_name(name)
     rate_limit("register")
     if len(password) < MIN_PASSWORD_LEN:
-        abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
+        abort(400, description=i18n.msg('pick a password of at least {min} characters', min=MIN_PASSWORD_LEN))
     with _lock:
         db = storage.load_db()
         if user_by_name(db, name):
@@ -535,8 +540,7 @@ def login():
         key = user["id"] if user else ident
         retry = login_retry_after(key)
         if retry:
-            abort(429, description="too many attempts on this account — "
-                                   f"wait about {max(1, retry // 60)} min and try again")
+            abort(429, description=i18n.msg('too many attempts on this account — wait about {minutes} min and try again', minutes=max(1, retry // 60)))
         if not password_ok(user, password):
             record_login_fail(key)
             abort(401, description="wrong name/e-mail or password")
@@ -626,7 +630,7 @@ def change_password():
     current = str(payload.get("current", ""))
     new_password = str(payload.get("new", ""))
     if len(new_password) < MIN_PASSWORD_LEN:
-        abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
+        abort(400, description=i18n.msg('pick a password of at least {min} characters', min=MIN_PASSWORD_LEN))
     with _lock:
         db = storage.load_db()
         user = current_user(db)

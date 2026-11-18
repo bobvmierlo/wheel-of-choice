@@ -67,9 +67,9 @@ def test_cannot_end_someone_elses_session(client):
 def test_device_label():
     ua = ("Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 "
           "(KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1")
-    assert accounts.device_label(ua) == "Safari on iPhone"
+    assert accounts.device_label(ua) == "Safari · iPhone"
     assert accounts.device_label("Mozilla/5.0 (Windows NT 10.0) Chrome/120.0 Safari/537.36") \
-        == "Chrome on Windows"
+        == "Chrome · Windows"
     assert accounts.device_label("") == "Unknown device"
 
 

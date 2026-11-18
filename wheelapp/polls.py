@@ -10,7 +10,7 @@ from .core import (
     _lock,
     app,
 )
-from . import accounts, core, push, storage, validation
+from . import i18n, accounts, core, push, storage, validation
 
 
 # ── Date polls (restaurant wheels) ───────────────────────────────────
@@ -20,12 +20,19 @@ from . import accounts, core, push, storage, validation
 # in. The poll lives *on* the history entry, so it rides the existing
 # 5-second history poll, dies when the entry is deleted, and clears with
 # the history — no separate lifecycle to keep in sync.
+WEEKDAYS = ("Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday")
+MONTHS = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+
+
 def pretty_date(iso):
-    """'2026-07-24' → 'Friday 24 Jul' (falls back to the raw string)."""
+    """'2026-07-24' → 'Friday 24 Jul', as a translatable Msg (weekday and
+    month get translated too). Falls back to the raw string."""
     try:
-        return datetime.strptime(iso, "%Y-%m-%d").strftime("%A %-d %b")
+        d = datetime.strptime(iso, "%Y-%m-%d")
     except (ValueError, TypeError):
         return str(iso)
+    return i18n.msg("{weekday} {day} {month}", weekday=i18n.msg(WEEKDAYS[d.weekday()]),
+                    day=d.day, month=i18n.msg(MONTHS[d.month - 1]))
 
 
 def clean_poll_dates(values):
@@ -44,13 +51,13 @@ def clean_poll_dates(values):
         if day < today:
             abort(400, description="those evenings are in the past — pick dates still to come")
         if day > horizon:
-            abort(400, description=f"keep it within the next {core.POLL_HORIZON_DAYS} days")
+            abort(400, description=i18n.msg('keep it within the next {days} days', days=core.POLL_HORIZON_DAYS))
         dates.add(day.isoformat())
     dates = sorted(dates)
     if len(dates) < 2:
         abort(400, description="put up at least two evenings to choose between")
     if len(dates) > POLL_MAX_DATES:
-        abort(400, description=f"that's a lot of evenings — {POLL_MAX_DATES} at most")
+        abort(400, description=i18n.msg("that's a lot of evenings — {max} at most", max=POLL_MAX_DATES))
     return dates
 
 
@@ -142,8 +149,8 @@ def start_poll(wheel_id, entry_id):
         label = " ".join(p for p in (entry.get("flag", ""), entry["name"]) if p)
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-            f"📅 {user['name']} started a date poll for {label}",
-            f"{wheel['name']}: tick the evenings you can make!",
+            i18n.msg('📅 {user} started a date poll for {label}', user=user['name'], label=label),
+            i18n.msg('{wheel}: tick the evenings you can make!', wheel=wheel['name']),
             wheel,
             tag=f"{wheel['id']}-poll-{entry_id}",
         )
@@ -175,10 +182,11 @@ def vote_poll(wheel_id, entry_id):
             spinner = db["users"].get(poll["by"])
             if spinner and spinner["id"] != user["id"]:
                 unanimous = poll_unanimous(members, poll)
-                body = (f"{pretty_date(unanimous[0])} works for all of you — lock it in! 🔒"
+                body = (i18n.msg("{date} works for all of you — lock it in! 🔒",
+                                 date=pretty_date(unanimous[0]))
                         if unanimous else
                         "…but no evening works for everyone yet. Add more dates?")
-                push.push_to_users([spinner], f"🗳️ Everyone's voted on {entry['name']}",
+                push.push_to_users([spinner], i18n.msg("🗳️ Everyone's voted on {entry}", entry=entry['name']),
                               body, wheel, tag=f"{wheel['id']}-poll-{entry_id}")
         return jsonify({"history": history_view(db, wheel, user)})
 
@@ -209,8 +217,7 @@ def lock_poll(wheel_id, entry_id):
         if not poll:
             abort(404, description="that date poll is gone")
         if poll["status"] == "locked":
-            abort(409, description=f"too late — {pretty_date(poll['locked_date'])} "
-                                   "is already locked in")
+            abort(409, description=i18n.msg('too late — {date} is already locked in', date=pretty_date(poll['locked_date'])))
         if date_str not in poll["dates"]:
             abort(400, description="that date isn't one of the options")
         # revalidate against current members: a fresh join or changed vote
@@ -229,8 +236,8 @@ def lock_poll(wheel_id, entry_id):
         )
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
-            f"🗓️ {pretty_date(date_str)} it is — dinner at {entry['name']}!",
-            f"{user['name']} locked it in on {wheel['name']} — pop it in your calendar 📅",
+            i18n.msg('🗓️ {date} it is — dinner at {entry}!', date=pretty_date(date_str), entry=entry['name']),
+            i18n.msg('{user} locked it in on {wheel} — pop it in your calendar 📅', user=user['name'], wheel=wheel['name']),
             wheel,
             tag=f"{wheel['id']}-poll-{entry_id}",
             gcal_url=dinner_gcal_url(entry["name"], validation.dest_calendar_location(dest), date_str),

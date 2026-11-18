@@ -13,6 +13,13 @@ import {
   WHEEL_TYPE_META, SEGMENT_COLORS, TOKEN_KEY,
 } from './constants.js';
 import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './utils.js';
+import {
+  t, tn, initI18n, currentLanguage, availableLanguages, setLanguage,
+} from './i18n.js';
+
+// Translations load before anything renders, so every t() below already
+// speaks the user's language (switching language reloads the page).
+await initI18n();
 
 (function () {
   'use strict';
@@ -114,7 +121,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function partnerNames(wheel = currentWheel()) {
     const members = (wheel && wheel.members) || [];
     const others = members.filter((n) => n !== me.user.name);
-    return others.length ? others.join(' & ') : 'your partner';
+    return others.length ? others.join(' & ') : t('your partner');
   }
 
   // Merge fresh round state from the server; when a partner acted on my
@@ -125,7 +132,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (JSON.stringify(before) === JSON.stringify(round)) return;
     if (before.pending && (before.pending.mine || before.pending.i_confirmed) && !round.pending) {
       wheelHint.textContent = round.vetoed_ids.includes(before.pending.dest_id)
-        ? `${before.pending.flag} ${before.pending.name} got vetoed 🙅 — spin again!`
+        ? t(`{flag} {name} got vetoed 🙅 — spin again!`, { flag: before.pending.flag, name: before.pending.name })
         : finalMessage(before.pending);
     }
     renderPending();
@@ -134,13 +141,30 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function finalMessage(pick) {
     return isTravelWheel()
-      ? `${pick.flag} ${pick.name} it is — time to book! 🧳`
-      : `${pick.flag} ${pick.name} it is — enjoy your meal! 🍽️`;
+      ? t(`{flag} {name} it is — time to book! 🧳`, { flag: pick.flag, name: pick.name })
+      : t(`{flag} {name} it is — enjoy your meal! 🍽️`, { flag: pick.flag, name: pick.name });
   }
+
+  // ── Language menu ─────────────────────────────────────────────────
+  // One entry per locale file on the server; picking one reloads the page.
+  (async () => {
+    const langs = await availableLanguages();
+    if (langs.length < 2) return;
+    const select = document.getElementById('lang-select');
+    for (const l of langs) {
+      const opt = document.createElement('option');
+      opt.value = l.code;
+      opt.textContent = l.name;
+      select.append(opt);
+    }
+    select.value = currentLanguage();
+    select.addEventListener('change', () => setLanguage(select.value));
+    document.getElementById('lang-picker').hidden = false;
+  })();
 
   // ── Server API ────────────────────────────────────────────────────
   async function rootApi(path, options = {}) {
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = { 'Content-Type': 'application/json', 'X-Lang': currentLanguage() };
     if (token) headers.Authorization = `Bearer ${token}`;
     const res = await fetch(`/api${path}`, { headers, ...options });
     if (res.status === 401 && token && !path.startsWith('/auth/')) {
@@ -149,7 +173,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (!res.ok) {
       let message = '';
       try { message = (await res.json()).error; } catch { /* not JSON */ }
-      throw new Error(message || `Server said ${res.status} for ${path}`);
+      throw new Error(message || t(`Server said {status} for {path}`, { status: res.status, path }));
     }
     return res.status === 204 ? null : res.json();
   }
@@ -172,7 +196,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       state.destinations = [];
       state.history = [];
       state.round = emptyRound();
-      wheelHint.textContent = '⚠️ Cannot reach the server — is it running? (python3 server.py)';
+      wheelHint.textContent = t('⚠️ Cannot reach the server — is it running? (python3 server.py)');
     }
     renderHistory();
     renderPending();
@@ -416,7 +440,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     } catch (err) {
       console.error(err);
       showView('auth');
-      if (token) authError.textContent = '⚠️ Cannot reach the server — is it running?';
+      if (token) authError.textContent = t('⚠️ Cannot reach the server — is it running?');
     }
   }
 
@@ -446,7 +470,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const add = document.createElement('button');
     add.type = 'button';
     add.className = 'tab tab-add';
-    add.title = 'Create or join another wheel';
+    add.title = t('Create or join another wheel');
     add.textContent = '➕';
     add.addEventListener('click', () => { if (!spinning) showAddWheel(false); });
     wheelTabs.append(add);
@@ -475,14 +499,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const wheel = currentWheel();
     const travel = isTravelWheel(wheel);
     document.querySelectorAll('.filter-group').forEach((g) => { g.hidden = !travel; });
-    filtersTitle.textContent = travel ? 'Trip preferences' : '🍽️ Restaurant wheel';
-    resultKicker.textContent = wheelMeta(wheel).kicker;
+    filtersTitle.textContent = travel ? t('Trip preferences') : t('🍽️ Restaurant wheel');
+    resultKicker.textContent = t(wheelMeta(wheel).kicker);
     vetoBtn.hidden = !travel;
     vetoNote.hidden = !travel;
     document.querySelectorAll('#manage-modal .travel-only').forEach((el) => { el.hidden = !travel; });
     document.querySelectorAll('#manage-modal .food-only').forEach((el) => { el.hidden = travel; });
-    addNameInput.placeholder = travel ? 'Destination name' : 'Restaurant name';
-    addFlagInput.placeholder = travel ? 'Emoji, e.g. 🏝️' : 'Emoji, e.g. 🍕';
+    addNameInput.placeholder = travel ? t('Destination name') : t('Restaurant name');
+    addFlagInput.placeholder = travel ? t('Emoji, e.g. 🏝️') : t('Emoji, e.g. 🍕');
   }
 
   // ── Auth form ─────────────────────────────────────────────────────
@@ -495,11 +519,11 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         t.classList.toggle('active', t === tab);
       });
       const registering = authMode === 'register';
-      authSubmit.textContent = registering ? 'Create account' : 'Log in';
+      authSubmit.textContent = registering ? t('Create account') : t('Log in');
       // logging in takes a name *or* an e-mail; registering asks for both
-      authNameLabel.textContent = registering ? 'Your name' : 'Name or e-mail';
+      authNameLabel.textContent = registering ? t('Your name') : t('Name or e-mail');
       authName.maxLength = registering ? 30 : 254;
-      authName.placeholder = registering ? 'e.g. Bob' : 'Your name or e-mail address';
+      authName.placeholder = registering ? t('e.g. Bob') : t('Your name or e-mail address');
       authName.autocomplete = registering ? 'nickname' : 'username';
       authEmailRow.hidden = !registering;
       authEmail.autocomplete = registering ? 'email' : 'off';
@@ -507,7 +531,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       // Only new passwords must clear the 8-char floor. Login stays lenient
       // so accounts created under the old 4-char rule can still get in.
       authPassword.minLength = registering ? 8 : 1;
-      authPassword.placeholder = registering ? 'At least 8 characters' : 'Your password';
+      authPassword.placeholder = registering ? t('At least 8 characters') : t('Your password');
       authError.textContent = '';
     });
   });
@@ -602,8 +626,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     ssoBlock.classList.toggle('sso-only', !passwords);
     if (!passwords) {
       authHint.textContent = inviteCode
-        ? 'Sign on with your account at the identity provider — you\'ll join the shared wheel straight after.'
-        : 'This server uses single sign-on — log in with your account at the identity provider.';
+        ? t('Sign on with your account at the identity provider — you\'ll join the shared wheel straight after.')
+        : t('This server uses single sign-on — log in with your account at the identity provider.');
     }
     setupRestore.hidden = !config.fresh;
     return passwords;
@@ -611,7 +635,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   async function finishSso(code) {
     showView('auth');
-    authError.textContent = '⏳ Signing you in…';
+    authError.textContent = t('⏳ Signing you in…');
     try {
       const result = await rootApi('/auth/oidc/finish', { method: 'POST', body: JSON.stringify({ code }) });
       authError.textContent = '';
@@ -637,8 +661,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function showAddWheel(firstTime, invite = '') {
     onboardTitle.textContent = firstTime
-      ? `Hi ${me.user.name} — let's build your first wheel 🎡`
-      : 'Add a wheel 🎡';
+      ? t(`Hi {name} — let's build your first wheel 🎡`, { name: me.user.name })
+      : t('Add a wheel 🎡');
     onboardBackRow.hidden = firstTime; // nothing to go back to yet
     legacyBanner.hidden = !(firstTime && me.legacy_available);
     onboardError.textContent = '';
@@ -665,7 +689,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const travel = onboardAnswers.type !== 'restaurants';
     travelQuestions.hidden = !travel;
     restaurantHint.hidden = travel;
-    wheelNameInput.placeholder = `e.g. ${WHEEL_TYPE_META[onboardAnswers.type].icon === '🌍' ? 'Holidays' : (onboardAnswers.type === 'citytrips' ? 'City trips' : 'Friday night dinners')}`;
+    const example = { holidays: t('Holidays'), citytrips: t('City trips') }[onboardAnswers.type]
+      || t('Friday night dinners');
+    wheelNameInput.placeholder = t('e.g. {name}', { name: example });
     if (travel) renderFavList();
   }
 
@@ -738,7 +764,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   onboardSubmit.addEventListener('click', async () => {
     const travel = onboardAnswers.type !== 'restaurants';
     if (travel && !onboardAnswers.home) {
-      onboardError.textContent = '⚠️ Tell us where home is first 🙂';
+      onboardError.textContent = t('⚠️ Tell us where home is first 🙂');
       return;
     }
     onboardSubmit.disabled = true;
@@ -764,7 +790,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   async function joinWithCode(code, errorEl) {
     errorEl.textContent = '';
     if (!code.trim()) {
-      errorEl.textContent = '⚠️ Enter a share code first';
+      errorEl.textContent = t('⚠️ Enter a share code first');
       return;
     }
     try {
@@ -807,9 +833,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   async function showWelcome() {
     const wheel = currentWheel();
-    document.getElementById('welcome-partner').textContent = partnerNames(wheel);
-    document.getElementById('welcome-wheel').textContent =
-      wheel ? `${wheelMeta(wheel).icon} ${wheel.name}` : '';
+    // built here so the whole sentence (names included) is one translation
+    const esc = (s) => s.replace(/[&<>"']/g, (c) => `&#${c.charCodeAt(0)};`);
+    document.getElementById('welcome-intro').innerHTML = t(
+      'You\'ve joined the wheel <strong>{wheel}</strong> of {partner}. Now star the entries <em>you</em> dream of — starred entries get a bigger slice of the wheel, and every extra star from another member 🌟 widens it further.',
+      { wheel: esc(wheel ? `${wheelMeta(wheel).icon} ${wheel.name}` : ''), partner: esc(partnerNames(wheel)) },
+    );
     welcomeError.textContent = '';
     welcomeSearch.value = '';
     welcomePicks.clear();
@@ -889,23 +918,25 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const text = document.createElement('p');
       text.className = 'invite-text';
       const who = document.createElement('strong');
-      who.textContent = inv.from_name || 'Someone';
+      who.textContent = inv.from_name || t('Someone');
       const what = document.createElement('strong');
       what.textContent = `${meta.icon} ${inv.name}`;
-      text.append(who, document.createTextNode(' shared '), what,
-        document.createTextNode(' with you'));
+      // "<who> shared <what> with you", with both names in bold
+      const [before, middle, after] = t('{who} shared {what} with you').split(/\{who\}|\{what\}/);
+      text.append(document.createTextNode(before), who, document.createTextNode(middle), what,
+        document.createTextNode(after || ''));
 
       const actions = document.createElement('div');
       actions.className = 'invite-actions';
       const accept = document.createElement('button');
       accept.type = 'button';
       accept.className = 'btn btn-primary';
-      accept.textContent = '✅ Accept';
+      accept.textContent = t('✅ Accept');
       accept.addEventListener('click', () => respondToInvite(inv.wheel_id, 'accept', accept));
       const dismiss = document.createElement('button');
       dismiss.type = 'button';
       dismiss.className = 'btn btn-ghost';
-      dismiss.textContent = 'Dismiss';
+      dismiss.textContent = t('Dismiss');
       dismiss.addEventListener('click', () => respondToInvite(inv.wheel_id, 'decline', dismiss));
       actions.append(accept, dismiss);
 
@@ -947,11 +978,11 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     shareLink.textContent = inviteLink(wheel);
     const others = wheel.members.filter((n) => n !== me.user.name);
     shareMembers.textContent = others.length
-      ? `On this wheel: ${wheel.members.join(', ')} 💑`
-      : 'Nobody else is on this wheel yet — send the code!';
+      ? t('On this wheel: {names} 💑', { names: wheel.members.join(', ') })
+      : t('Nobody else is on this wheel yet — send the code!');
     shareError.textContent = '';
-    copyCodeBtn.textContent = '📋 Copy';
-    copyLinkBtn.textContent = '📋 Copy';
+    copyCodeBtn.textContent = t('📋 Copy');
+    copyLinkBtn.textContent = t('📋 Copy');
     renderSharePending(wheel);
     renderSharePeople(wheel);
     shareModal.showModal();
@@ -963,7 +994,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function renderSharePending(wheel) {
     const pending = (wheel && wheel.pending) || [];
     sharePending.hidden = !pending.length;
-    if (pending.length) sharePending.textContent = `⏳ Waiting to accept: ${pending.join(', ')}`;
+    if (pending.length) sharePending.textContent = t('⏳ Waiting to accept: {names}', { names: pending.join(', ') });
   }
 
   // Pick-from-a-list sharing: fetch who's invitable and offer a checkbox
@@ -971,7 +1002,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   async function renderSharePeople(wheel) {
     selectedInvitees.clear();
     shareInviteBtn.disabled = true;
-    shareInviteBtn.textContent = 'Share with selected';
+    shareInviteBtn.textContent = t('Share with selected');
     sharePeopleList.innerHTML = '';
     sharePeopleEmpty.hidden = true;
     sharePeople.hidden = false;
@@ -1020,8 +1051,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       renderSharePending(fresh);      // now shows them under "waiting to accept"
       await renderSharePeople(fresh); // and drops them from the pick list
       shareInviteBtn.textContent = n
-        ? `✅ Shared with ${n} ${n === 1 ? 'person' : 'people'}`
-        : 'Nobody new to share with';
+        ? tn(n, '✅ Shared with 1 person', '✅ Shared with {n} people')
+        : t('Nobody new to share with');
     } catch (err) {
       shareError.textContent = `⚠️ ${err.message}`;
       shareInviteBtn.disabled = false;
@@ -1053,11 +1084,11 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   copyCodeBtn.addEventListener('click', async () => {
-    copyCodeBtn.textContent = (await copyToClipboard(currentWheel().code)) ? '✅ Copied' : '⚠️ Copy failed';
+    copyCodeBtn.textContent = (await copyToClipboard(currentWheel().code)) ? t('✅ Copied') : t('⚠️ Copy failed');
   });
 
   copyLinkBtn.addEventListener('click', async () => {
-    copyLinkBtn.textContent = (await copyToClipboard(inviteLink(currentWheel()))) ? '✅ Copied' : '⚠️ Copy failed';
+    copyLinkBtn.textContent = (await copyToClipboard(inviteLink(currentWheel()))) ? t('✅ Copied') : t('⚠️ Copy failed');
   });
 
   leaveBtn.addEventListener('click', async () => {
@@ -1065,8 +1096,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (!wheel) return;
     const alone = wheel.members.length <= 1;
     const msg = alone
-      ? `Leave ${wheel.name}? You're the only one on it, so the wheel and its history are gone for good.`
-      : `Leave ${wheel.name}? The others keep the wheel — you can rejoin later with its code.`;
+      ? t(`Leave {name}? You're the only one on it, so the wheel and its history are gone for good.`, { name: wheel.name })
+      : t(`Leave {name}? The others keep the wheel — you can rejoin later with its code.`, { name: wheel.name });
     if (!confirm(msg)) return;
     try {
       me = await rootApi(`/wheels/${wheel.id}/leave`, { method: 'POST' });
@@ -1252,10 +1283,10 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     notifyIosHint.hidden = true;
     if (!pushSupported()) {
       if (isIOS && !isStandalone) {
-        notifyState.textContent = '📲 One step to go — this needs the app on your Home Screen:';
+        notifyState.textContent = t('📲 One step to go — this needs the app on your Home Screen:');
         notifyIosHint.hidden = false;
       } else {
-        notifyState.textContent = "📴 This browser doesn't support push notifications.";
+        notifyState.textContent = t("📴 This browser doesn't support push notifications.");
       }
       return;
     }
@@ -1267,21 +1298,19 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       return;
     }
     if (!server.enabled) {
-      notifyState.textContent = "📴 The server can't send notifications yet — the README's " +
-        'notifications section explains the one-time setup (install pywebpush, restart).';
+      notifyState.textContent = t("📴 The server can't send notifications yet — the README's notifications section explains the one-time setup (install pywebpush, restart).");
       return;
     }
     if (Notification.permission === 'denied') {
-      notifyState.textContent = '🔕 Notifications are blocked for this site — allow them again ' +
-        'in your browser or system settings, then come back here.';
+      notifyState.textContent = t('🔕 Notifications are blocked for this site — allow them again in your browser or system settings, then come back here.');
       return;
     }
     const sub = await pushSubscription().catch(() => null);
     if (sub && Notification.permission === 'granted') {
-      notifyState.textContent = '✅ Notifications are on for this device.';
+      notifyState.textContent = t('✅ Notifications are on for this device.');
       notifyDisable.hidden = false;
     } else {
-      notifyState.textContent = '💤 Notifications are off for this device.';
+      notifyState.textContent = t('💤 Notifications are off for this device.');
       notifyEnable.hidden = false;
     }
   }
@@ -1298,9 +1327,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   // so callers can surface it. Shared by the modal and the desktop toast.
   async function enablePush() {
     const server = await rootApi('/push/status');
-    if (!server.enabled) throw new Error('the server has push notifications disabled');
+    if (!server.enabled) throw new Error(t('the server has push notifications disabled'));
     if (await Notification.requestPermission() !== 'granted') {
-      throw new Error("permission wasn't granted");
+      throw new Error(t("permission wasn't granted"));
     }
     const reg = await navigator.serviceWorker.ready;
     let sub = await reg.pushManager.getSubscription();
@@ -1467,41 +1496,41 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const poll = entry.poll;
     infoPollActions.innerHTML = '';
     if (!poll) {
-      infoPollSummary.textContent = "Great pick — now find an evening you're all free 🗳️";
+      infoPollSummary.textContent = t("Great pick — now find an evening you're all free 🗳️");
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'btn btn-primary btn-small';
-      b.textContent = '📅 Start a date poll';
+      b.textContent = t('📅 Start a date poll');
       b.addEventListener('click', () => openPollModal(entry, 'propose'));
       infoPollActions.append(b);
     } else if (poll.status === 'locked') {
-      infoPollSummary.textContent = `🗓️ ${prettyDate(poll.locked_date)} — it's a date!`;
+      infoPollSummary.textContent = t(`🗓️ {date} — it's a date!`, { date: prettyDate(poll.locked_date) });
       // the entry only carries name + flag; the address lives on the
       // destination (gone if it was deleted since — the name still works)
       const dest = state.destinations.find((x) => x.id === entry.dest_id);
       const loc = destLocation(dest);
-      ghostBtn(infoPollActions, '⬇️ Add to calendar (.ics)', () => downloadIcs(entry.name, poll.locked_date, loc));
+      ghostBtn(infoPollActions, t('⬇️ Add to calendar (.ics)'), () => downloadIcs(entry.name, poll.locked_date, loc));
       const g = document.createElement('a');
       g.className = 'btn btn-ghost btn-small';
       g.href = googleCalUrl(entry.name, poll.locked_date, loc);
       g.target = '_blank';
       g.rel = 'noopener noreferrer';
-      g.textContent = '📆 Google Calendar';
+      g.textContent = t('📆 Google Calendar');
       infoPollActions.append(g);
       const scrap = document.createElement('button');
       scrap.type = 'button';
       scrap.className = 'linklike';
-      scrap.textContent = 'Scrap the date & poll again…';
+      scrap.textContent = t('Scrap the date & poll again…');
       scrap.addEventListener('click', () => { pollEntryId = entry.id; scrapPoll(); });
       infoPollActions.append(scrap);
     } else {
       const voted = poll.votes.length;
-      infoPollSummary.textContent = `${poll.dates.length} evenings up · ${voted} of ${poll.members} voted`
-        + (poll.waiting_names.length ? ` · waiting for ${poll.waiting_names.join(' & ')}` : '');
+      infoPollSummary.textContent = t(`{count} evenings up · {voted} of {members} voted`, { count: poll.dates.length, voted, members: poll.members })
+        + (poll.waiting_names.length ? ` · ${t('waiting for {names}', { names: poll.waiting_names.join(' & ') })}` : '');
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'btn btn-primary btn-small';
-      b.textContent = '🗳️ Vote / view poll';
+      b.textContent = t('🗳️ Vote / view poll');
       b.addEventListener('click', () => openPollModal(entry, 'vote'));
       infoPollActions.append(b);
     }
@@ -1530,10 +1559,10 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function setPollLegend(el) {
     if (pollLinked) {
-      el.innerHTML = `<span class="cal-dot busy"></span>busy that evening (from ${fmtHour(pollEveningFrom)})`
-        + '<span class="cal-dot free"></span>free — <em>from your calendar; all still tappable</em>';
+      el.innerHTML = t(`<span class="cal-dot busy"></span>busy that evening (from {hour})`, { hour: fmtHour(pollEveningFrom) })
+        + t('<span class="cal-dot free"></span>free — <em>from your calendar; all still tappable</em>');
     } else if (pollCalEnabled) {
-      el.textContent = '📆 Link your calendar (top bar) and your busy evenings mark themselves.';
+      el.textContent = t('📆 Link your calendar (top bar) and your busy evenings mark themselves.');
     } else {
       el.textContent = '';
     }
@@ -1546,8 +1575,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     // feeds can take a few seconds and a blank wait reads as a hang.
     const poll = entry.poll;
     pollTitle.textContent = mode !== 'propose' && poll
-      ? (poll.status === 'locked' ? "🗓️ It's a date" : '🗳️ When can everyone make it?')
-      : '🗳️ Find an evening';
+      ? (poll.status === 'locked' ? t("🗓️ It's a date") : t('🗳️ When can everyone make it?'))
+      : t('🗳️ Find an evening');
     pollSub.textContent = `${entry.flag} ${entry.name}`;
     pollPropose.hidden = true;
     pollVoteView.hidden = true;
@@ -1599,7 +1628,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         cell.dataset.date = iso;
         if (pollSelected.has(iso)) cell.classList.add('selected');
         const st = pollAvail[iso];
-        if (st === 'busy') { cell.classList.add('busy'); cell.title = "you're busy that evening"; }
+        if (st === 'busy') { cell.classList.add('busy'); cell.title = t("you're busy that evening"); }
         else if (st === 'unknown') cell.classList.add('unknown');
         cell.addEventListener('click', () => {
           if (pollSelected.has(iso)) pollSelected.delete(iso); else pollSelected.add(iso);
@@ -1624,12 +1653,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function syncCreateBtn() {
     pollCreateBtn.disabled = pollSelected.size < 2;
     pollCreateBtn.textContent = pollSelected.size < 2
-      ? 'Pick at least two evenings' : `📅 Put ${pollSelected.size} evenings up`;
+      ? t('Pick at least two evenings') : t(`📅 Put {size} evenings up`, { size: pollSelected.size });
   }
 
   function showPollPropose(entry) {
-    pollTitle.textContent = '🗳️ Find an evening';
-    pollSub.textContent = `Pick the evenings that could work for ${entry.flag} ${entry.name}, then put them to the group.`;
+    pollTitle.textContent = t('🗳️ Find an evening');
+    pollSub.textContent = t(`Pick the evenings that could work for {flag} {name}, then put them to the group.`, { flag: entry.flag, name: entry.name });
     pollSelected = new Set();
     pollViewMonth = null;  // always open on the current month
     setPollLegend(pollLegend);
@@ -1642,8 +1671,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function showPollVote(entry) {
     const poll = entry.poll;
     if (!poll) { showPollPropose(entry); return; }
-    pollTitle.textContent = poll.status === 'locked' ? "🗓️ It's a date" : '🗳️ When can everyone make it?';
-    pollSub.textContent = `${entry.flag} ${entry.name} · started by ${poll.by_name}`;
+    pollTitle.textContent = poll.status === 'locked' ? t("🗓️ It's a date") : t('🗳️ When can everyone make it?');
+    pollSub.textContent = t(`{flag} {name} · started by {by_name}`, { flag: entry.flag, name: entry.name, by_name: poll.by_name });
     myVote = new Set(poll.my_dates || []);
     setPollLegend(pollVoteLegend);
     renderPollRows(entry);
@@ -1671,28 +1700,28 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const voters = document.createElement('div');
       voters.className = 'poll-row-voters';
       const yes = poll.votes.filter((v) => v.dates.includes(date)).map((v) => v.name);
-      voters.textContent = yes.length ? `👍 ${yes.join(' & ')}` : 'no one yet';
+      voters.textContent = yes.length ? `👍 ${yes.join(' & ')}` : t('no one yet');
       main.append(dl, voters);
       li.append(main);
       if (poll.status === 'locked') {
         if (poll.locked_date === date) {
           const badge = document.createElement('span');
           badge.className = 'poll-locked';
-          badge.textContent = '🔒 locked';
+          badge.textContent = t('🔒 locked');
           li.append(badge);
         }
       } else {
         const tick = document.createElement('button');
         tick.type = 'button';
         tick.className = 'poll-tick' + (myVote.has(date) ? ' on' : '');
-        tick.textContent = myVote.has(date) ? '✓ me' : 'I can';
+        tick.textContent = myVote.has(date) ? t('✓ me') : t('I can');
         tick.addEventListener('click', () => toggleVote(date));
         li.append(tick);
         if (poll.unanimous.includes(date)) {
           const lock = document.createElement('button');
           lock.type = 'button';
           lock.className = 'btn btn-primary btn-small';
-          lock.textContent = 'Lock it in 🔒';
+          lock.textContent = t('Lock it in 🔒');
           lock.addEventListener('click', () => lockDate(date));
           li.append(lock);
         }
@@ -1700,15 +1729,15 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       pollRows.append(li);
     }
     if (poll.status === 'locked') {
-      pollFoot.textContent = `Locked in by ${poll.locked_by_name}. Enjoy! 🎉`;
+      pollFoot.textContent = t(`Locked in by {locked_by_name}. Enjoy! 🎉`, { locked_by_name: poll.locked_by_name });
     } else if (poll.my_dates == null) {
-      pollFoot.textContent = 'Tick the evenings you can make.';
+      pollFoot.textContent = t('Tick the evenings you can make.');
     } else if (poll.waiting_names.length) {
-      pollFoot.textContent = `Waiting for ${poll.waiting_names.join(' & ')} to vote.`;
+      pollFoot.textContent = t('Waiting for {names} to vote.', { names: poll.waiting_names.join(' & ') });
     } else if (!poll.unanimous.length) {
-      pollFoot.textContent = "No evening works for everyone yet 😬 — scrap it and try different dates.";
+      pollFoot.textContent = t("No evening works for everyone yet 😬 — scrap it and try different dates.");
     } else {
-      pollFoot.textContent = "Everyone's voted — lock in an evening that works! 🔒";
+      pollFoot.textContent = t("Everyone's voted — lock in an evening that works! 🔒");
     }
     pollScrapBtn.hidden = false;
   }
@@ -1753,7 +1782,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   async function scrapPoll() {
-    if (!confirm('Scrap this date poll for everyone on the wheel?')) return;
+    if (!confirm(t('Scrap this date poll for everyone on the wheel?'))) return;
     pollError.textContent = '';
     try {
       const res = await api(`/history/${pollEntryId}/poll`, { method: 'DELETE' });
@@ -1815,8 +1844,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     try {
       const info = await rootApi('/me/calendars');
       if (!info.enabled) {
-        calendarState.textContent = "📴 This server can't read calendars yet — polls still work, "
-          + 'just without the busy-evening hints.';
+        calendarState.textContent = t("📴 This server can't read calendars yet — polls still work, just without the busy-evening hints.");
         feedForm.hidden = true;
         feedList.innerHTML = '';
         return;
@@ -1836,7 +1864,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         const rm = document.createElement('button');
         rm.type = 'button';
         rm.className = 'btn btn-ghost btn-small';
-        rm.title = 'Remove this calendar';
+        rm.title = t('Remove this calendar');
         rm.textContent = '✕';
         rm.addEventListener('click', () => removeFeed(feed.id));
         li.append(main, rm);
@@ -1844,8 +1872,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       }
       feedForm.hidden = info.feeds.length >= 4;
       calendarState.textContent = info.feeds.length
-        ? `${info.feeds.length} calendar${info.feeds.length === 1 ? '' : 's'} linked — only you see your busy evenings.`
-        : 'No calendars linked yet.';
+        ? tn(info.feeds.length, '1 calendar linked — only you see your busy evenings.', '{n} calendars linked — only you see your busy evenings.')
+        : t('No calendars linked yet.');
     } catch (err) {
       calendarState.textContent = `⚠️ ${err.message}`;
     }
@@ -1903,9 +1931,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     passwordCurrentRow.hidden = !hasPw;
     passwordCurrent.required = hasPw;
     passwordHint.textContent = hasPw
-      ? 'Pick a new password for your account. You\'ll stay logged in on this device; other devices keep their session too.'
-      : 'Your account signs in through single sign-on and has no password. Set one to also be able to log in with your name or e-mail.';
-    passwordSubmit.textContent = hasPw ? 'Change password' : 'Set password';
+      ? t('Pick a new password for your account. You\'ll stay logged in on this device; other devices are logged out.')
+      : t('Your account signs in through single sign-on and has no password. Set one to also be able to log in with your name or e-mail.');
+    passwordSubmit.textContent = hasPw ? t('Change password') : t('Set password');
     const sso = me.sso || {};
     const passwordsOn = sso.password_login !== false;
     // with passwords switched off there's nothing to set or confirm with
@@ -1916,13 +1944,13 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     passwordHint.previousElementSibling.hidden = !passwordsOn; // the "Password" heading
     accountSso.hidden = !(sso.enabled || u.sso_linked);
     accountSsoStatus.textContent = u.sso_linked
-      ? '🔗 Your account is linked — you can log in with the sign-on button.'
-      : 'Not linked yet. Link it to log in with the sign-on button from now on — handy when your e-mail address here differs from the one your identity provider has.';
+      ? t('🔗 Your account is linked — you can log in with the sign-on button.')
+      : t('Not linked yet. Link it to log in with the sign-on button from now on — handy when your e-mail address here differs from the one your identity provider has.');
     accountSsoLink.hidden = u.sso_linked || !sso.enabled;
-    accountSsoLink.textContent = `🔗 ${sso.label || 'Link sign-on'}`.replace(/^🔗 Log in with/, '🔗 Link');
+    accountSsoLink.textContent = t('🔗 Link sign-on');
     accountSsoUnlink.hidden = !u.sso_linked || !passwordsOn;
     accountSsoUnlink.disabled = !hasPw;
-    accountSsoUnlink.title = hasPw ? 'Detach your account from single sign-on' : 'Set a password first, or you couldn\'t log in anymore';
+    accountSsoUnlink.title = hasPw ? t('Detach your account from single sign-on') : t('Set a password first, or you couldn\'t log in anymore');
   }
 
   function openAccount(ssoMessage = '', ssoErr = '') {
@@ -1950,13 +1978,13 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const li = document.createElement('li');
       const name = document.createElement('span');
       name.className = 'dest-name';
-      name.textContent = `${s.current ? '📍' : '💻'} ${s.device}${s.current ? ' (this device)' : ''}`;
+      name.textContent = s.current ? t('📍 {device} (this device)', { device: t(s.device) }) : `💻 ${t(s.device)}`;
       const meta = document.createElement('span');
       meta.className = 'dest-meta';
-      meta.textContent = `last active ${formatDateTime(s.last_seen)} · since ${formatDateTime(s.created)}`;
+      meta.textContent = t(`last active {last_seen} · since {created}`, { last_seen: formatDateTime(s.last_seen), created: formatDateTime(s.created) });
       li.append(name, meta);
       if (!s.current) {
-        li.append(adminActionBtn('Log out', 'Log this device out', async () => {
+        li.append(adminActionBtn(t('Log out'), t('Log this device out'), async () => {
           sessionError.textContent = '';
           try {
             renderSessions(await rootApi(`/me/sessions/${encodeURIComponent(s.id)}`, { method: 'DELETE' }));
@@ -1980,7 +2008,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   endOthersBtn.addEventListener('click', async () => {
-    if (!confirm('Log out every other device? They\'ll need to log in again.')) return;
+    if (!confirm(t('Log out every other device? They\'ll need to log in again.'))) return;
     sessionError.textContent = '';
     try {
       renderSessions(await rootApi('/me/sessions/end-others', { method: 'POST' }));
@@ -2001,7 +2029,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       })) };
       emailPassword.value = '';
       renderAccount();
-      emailState.textContent = me.user.email ? '✅ E-mail saved' : '✅ E-mail removed';
+      emailState.textContent = me.user.email ? t('✅ E-mail saved') : t('✅ E-mail removed');
     } catch (err) {
       emailError.textContent = `⚠️ ${err.message}`;
     } finally {
@@ -2021,12 +2049,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   });
 
   accountSsoUnlink.addEventListener('click', async () => {
-    if (!confirm('Unlink single sign-on? You\'ll log in with your password from now on.')) return;
+    if (!confirm(t('Unlink single sign-on? You\'ll log in with your password from now on.'))) return;
     accountSsoError.textContent = '';
     try {
       me = { ...me, ...(await rootApi('/me/sso/unlink', { method: 'POST' })) };
       renderAccount();
-      accountSsoState.textContent = '✅ Unlinked';
+      accountSsoState.textContent = t('✅ Unlinked');
     } catch (err) {
       accountSsoError.textContent = `⚠️ ${err.message}`;
     }
@@ -2038,7 +2066,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     passwordError.textContent = '';
     passwordState.textContent = '';
     if (passwordNew.value !== passwordConfirm.value) {
-      passwordError.textContent = '⚠️ The two new passwords don\'t match';
+      passwordError.textContent = t('⚠️ The two new passwords don\'t match');
       return;
     }
     passwordSubmit.disabled = true;
@@ -2048,7 +2076,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         body: JSON.stringify({ current: passwordCurrent.value, new: passwordNew.value }),
       });
       passwordForm.reset();
-      passwordState.textContent = me.user.has_password ? '✅ Password changed' : '✅ Password set';
+      passwordState.textContent = me.user.has_password ? t('✅ Password changed') : t('✅ Password set');
       me.user.has_password = true;
       renderAccount();
       loadSessions(); // the other devices were just logged out
@@ -2072,7 +2100,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       feedUrl.value = '';
       feedLabel.value = '';
       await renderCalendarModal();
-      calendarState.textContent = `Linked ✓ — ${res.busy_days} busy evening${res.busy_days === 1 ? '' : 's'} spotted in the next couple of months.`;
+      calendarState.textContent = tn(res.busy_days, 'Linked ✓ — 1 busy evening spotted in the next couple of months.', 'Linked ✓ — {n} busy evenings spotted in the next couple of months.');
     } catch (err) {
       calendarError.textContent = `⚠️ ${err.message}`;
     } finally {
@@ -2120,7 +2148,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     settingEveningFrom.value = s.evening_from;
     settingHorizon.value = s.poll_horizon_days;
     settingRegistrationOpen.checked = !!s.registration_open;
-    registrationOpenLabel.textContent = s.registration_open ? 'open to everyone' : 'invite-only';
+    registrationOpenLabel.textContent = s.registration_open ? t('open to everyone') : t('invite-only');
     // the raw Maps key only rides on admin settings responses
     if ('google_maps_api_key' in s) settingMapsKey.value = s.google_maps_api_key || '';
     const [eMin, eMax] = s.bounds.evening_from;
@@ -2152,7 +2180,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   settingsSaveBtn.addEventListener('click', async () => {
-    settingsStatus.textContent = '⏳ Saving…';
+    settingsStatus.textContent = t('⏳ Saving…');
     settingsSaveBtn.disabled = true;
     try {
       const s = await rootApi('/admin/settings', {
@@ -2164,7 +2192,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         }),
       });
       fillSettings(s);
-      settingsStatus.textContent = '✅ Saved — polls use these straight away.';
+      settingsStatus.textContent = t('✅ Saved — polls use these straight away.');
     } catch (err) {
       settingsStatus.textContent = `⚠️ ${err.message}`;
     } finally {
@@ -2173,7 +2201,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   });
 
   mapsKeySaveBtn.addEventListener('click', async () => {
-    mapsKeyStatus.textContent = '⏳ Saving…';
+    mapsKeyStatus.textContent = t('⏳ Saving…');
     mapsKeySaveBtn.disabled = true;
     const key = settingMapsKey.value.trim();
     try {
@@ -2182,8 +2210,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         body: JSON.stringify({ google_maps_api_key: key }),
       }));
       mapsKeyStatus.textContent = key
-        ? '✅ Saved — members can search for restaurant addresses.'
-        : '✅ Cleared — location search is off; members type addresses by hand.';
+        ? t('✅ Saved — members can search for restaurant addresses.')
+        : t('✅ Cleared — location search is off; members type addresses by hand.');
       if (me) me.maps_enabled = !!key;  // reflect in the add form without a reload
     } catch (err) {
       mapsKeyStatus.textContent = `⚠️ ${err.message}`;
@@ -2214,10 +2242,10 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     ssoIssuer.value = v.issuer || '';
     ssoClientId.value = v.client_id || '';
     ssoClientSecret.value = '';
-    ssoClientSecret.placeholder = v.client_secret_set ? '•••••• (stored)' : 'Paste the client secret';
+    ssoClientSecret.placeholder = v.client_secret_set ? t('•••••• (stored)') : t('Paste the client secret');
     ssoSecretHint.textContent = v.client_secret_set
-      ? 'A secret is stored. Leave empty to keep it, or paste a new one to replace it.'
-      : 'Stored on the server, never shown again.';
+      ? t('A secret is stored. Leave empty to keep it, or paste a new one to replace it.')
+      : t('Stored on the server, never shown again.');
     ssoPublicUrl.value = v.public_url || '';
     ssoButtonLabel.value = v.button_label || '';
     ssoMatchEmail.checked = !!v.match_email;
@@ -2228,13 +2256,15 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     ssoDisablePasswordsHint.innerHTML = SSO_DISABLE_HINT;
     const extra = [];
     if (v.password_login_forced) {
-      extra.push('⚠️ WHEEL_FORCE_PASSWORD_LOGIN is set on the server, so passwords work anyway right now.');
+      extra.push(t('⚠️ WHEEL_FORCE_PASSWORD_LOGIN is set on the server, so passwords work anyway right now.'));
     } else if (v.disable_password_login && !v.enabled) {
-      extra.push('⚠️ Sign-on isn\'t fully configured, so passwords stay on until it is.');
+      extra.push(t('⚠️ Sign-on isn\'t fully configured, so passwords stay on until it is.'));
     }
     if (v.unlinked_users && v.unlinked_users.length) {
-      extra.push(`Not linked to sign-on yet: ${v.unlinked_users.join(', ')}`
-        + (v.disable_password_login ? ' — they can only get in through sign-on now (matched by e-mail).' : '.'));
+      const names = v.unlinked_users.join(', ');
+      extra.push(v.disable_password_login
+        ? t('Not linked to sign-on yet: {names} — they can only get in through sign-on now (matched by e-mail).', { names })
+        : t('Not linked to sign-on yet: {names}.', { names }));
     }
     for (const line of extra) {
       const span = document.createElement('span');
@@ -2242,7 +2272,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       span.textContent = line;
       ssoDisablePasswordsHint.append(document.createElement('br'), span);
     }
-    if (me) me.sso = { enabled: !!v.enabled, label: v.button_label, password_login: !!v.password_login };
+    if (me) me.sso = { enabled: !!v.enabled, label: v.button_label || t('Log in with SSO'), password_login: !!v.password_login };
     return v;
   }
 
@@ -2256,7 +2286,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   ssoSaveBtn.addEventListener('click', async () => {
-    ssoStatus.textContent = '⏳ Saving…';
+    ssoStatus.textContent = t('⏳ Saving…');
     ssoSaveBtn.disabled = true;
     const body = {
       issuer: ssoIssuer.value.trim(),
@@ -2272,9 +2302,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     try {
       const v = fillSso(await rootApi('/admin/sso', { method: 'PUT', body: JSON.stringify(body) }));
       ssoStatus.textContent = v.enabled
-        ? '✅ Saved — the sign-on button is on the login screen.'
-        : '✅ Saved — fill in issuer, client ID and secret to switch sign-on on.';
-      if (v.warning) ssoStatus.textContent += ` ⚠️ But ${v.warning}.`;
+        ? t('✅ Saved — the sign-on button is on the login screen.')
+        : t('✅ Saved — fill in issuer, client ID and secret to switch sign-on on.');
+      if (v.warning) ssoStatus.textContent += t(` ⚠️ But {warning}.`, { warning: v.warning });
       if (me && me.sso) renderAdminUsers(await rootApi('/admin/users')); // reset-password buttons follow the switch
     } catch (err) {
       ssoStatus.textContent = `⚠️ ${err.message}`;
@@ -2284,10 +2314,10 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   });
 
   ssoTestBtn.addEventListener('click', async () => {
-    ssoStatus.textContent = '⏳ Contacting the identity provider…';
+    ssoStatus.textContent = t('⏳ Contacting the identity provider…');
     try {
       const r = await rootApi('/admin/sso/test', { method: 'POST' });
-      ssoStatus.textContent = `✅ Reached ${r.issuer} (save first if you changed the issuer).`;
+      ssoStatus.textContent = t(`✅ Reached {issuer} (save first if you changed the issuer).`, { issuer: r.issuer });
     } catch (err) {
       ssoStatus.textContent = `⚠️ ${err.message}`;
     }
@@ -2304,15 +2334,15 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   settingRegistrationOpen.addEventListener('change', async () => {
     const open = settingRegistrationOpen.checked;
-    registrationStatus.textContent = '⏳ Saving…';
+    registrationStatus.textContent = t('⏳ Saving…');
     try {
       fillSettings(await rootApi('/admin/settings', {
         method: 'PUT',
         body: JSON.stringify({ registration_open: open }),
       }));
       registrationStatus.textContent = open
-        ? '✅ Registration is open — anyone can create an account.'
-        : '✅ Registration is invite-only — hand out invite links below.';
+        ? t('✅ Registration is open — anyone can create an account.')
+        : t('✅ Registration is invite-only — hand out invite links below.');
     } catch (err) {
       settingRegistrationOpen.checked = !open; // roll the switch back on failure
       registrationStatus.textContent = `⚠️ ${err.message}`;
@@ -2324,7 +2354,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (!invites.length) {
       const li = document.createElement('li');
       li.className = 'dest-meta';
-      li.textContent = 'No invite links yet — create one to invite someone.';
+      li.textContent = t('No invite links yet — create one to invite someone.');
       inviteList.append(li);
       return;
     }
@@ -2335,15 +2365,15 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       name.textContent = `🎟️ ${inv.code}`;
       const meta = document.createElement('span');
       meta.className = 'dest-meta';
-      meta.textContent = inv.by ? `made by ${inv.by}` : '';
+      meta.textContent = inv.by ? t(`made by {by}`, { by: inv.by }) : '';
       li.append(name, meta);
 
-      li.append(adminActionBtn('🔗 Copy link', 'Copy this invite link to share', async (e) => {
+      li.append(adminActionBtn(t('🔗 Copy link'), t('Copy this invite link to share'), async (e) => {
         const ok = await copyToClipboard(accountInviteLink(inv.code));
-        e.target.textContent = ok ? '✅ Copied' : '⚠️ Copy failed';
-        setTimeout(() => { e.target.textContent = '🔗 Copy link'; }, 1500);
+        e.target.textContent = ok ? t('✅ Copied') : t('⚠️ Copy failed');
+        setTimeout(() => { e.target.textContent = t('🔗 Copy link'); }, 1500);
       }));
-      li.append(adminActionBtn('✕ Revoke', 'Delete this invite so it can no longer be used', async () => {
+      li.append(adminActionBtn(t('✕ Revoke'), t('Delete this invite so it can no longer be used'), async () => {
         registrationStatus.textContent = '';
         try {
           renderInvites(await rootApi(`/admin/invites/${encodeURIComponent(inv.code)}`, { method: 'DELETE' }));
@@ -2372,8 +2402,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const link = accountInviteLink(res.code);
       const copied = await copyToClipboard(link);
       registrationStatus.textContent = copied
-        ? `✅ Invite link copied — send it to whoever you're inviting.`
-        : `✅ Invite ${res.code} created — copy its link below.`;
+        ? t(`✅ Invite link copied — send it to whoever you're inviting.`)
+        : t(`✅ Invite {code} created — copy its link below.`, { code: res.code });
     } catch (err) {
       registrationStatus.textContent = `⚠️ ${err.message}`;
     } finally {
@@ -2392,14 +2422,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     statusEl.textContent = '';
     try {
       const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
-      if (!res.ok) throw new Error(`Server said ${res.status}`);
+      if (!res.ok) throw new Error(t(`Server said {status}`, { status: res.status }));
       const blob = await res.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
       a.download = filename;
       a.click();
       URL.revokeObjectURL(a.href);
-      statusEl.textContent = '✅ Backup downloaded — tuck it away somewhere safe.';
+      statusEl.textContent = t('✅ Backup downloaded — tuck it away somewhere safe.');
     } catch (err) {
       statusEl.textContent = `⚠️ ${err.message}`;
     }
@@ -2416,20 +2446,20 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   adminRestoreFile.addEventListener('change', async () => {
     const file = adminRestoreFile.files[0];
     if (!file) return;
-    if (!confirm(`Restore "${file.name}"? This replaces ALL current data — accounts, wheels, history and settings — with the backup's contents.`)) return;
-    backupStatus.textContent = '⏳ Restoring…';
+    if (!confirm(t(`Restore "{name}"? This replaces ALL current data — accounts, wheels, history and settings — with the backup's contents.`, { name: file.name }))) return;
+    backupStatus.textContent = t('⏳ Restoring…');
     try {
       const text = await file.text();
       JSON.parse(text); // catch garbage before it travels
       const res = await rootApi('/admin/restore', { method: 'POST', body: text });
       if (res.relogin) {
-        alert('Backup restored. Your account isn\'t in this backup, so please log in again.');
+        alert(t('Backup restored. Your account isn\'t in this backup, so please log in again.'));
         forceLogout();
         return;
       }
       backupStatus.textContent = res.files.includes('vapid-private-key.pem')
-        ? '✅ Backup restored, push key included.'
-        : '✅ Backup restored. (Older backup without a push key — the current one was kept.)';
+        ? t('✅ Backup restored, push key included.')
+        : t('✅ Backup restored. (Older backup without a push key — the current one was kept.)');
       me = await rootApi('/me');
       applyMe();
       renderAdminUsers(await rootApi('/admin/users'));
@@ -2451,8 +2481,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (!v.backups.length) {
       const li = document.createElement('li');
       li.className = 'dest-meta';
-      li.textContent = v.keep ? 'No automatic backups yet — the first one is made within the hour.'
-        : 'Automatic backups are off.';
+      li.textContent = v.keep ? t('No automatic backups yet — the first one is made within the hour.')
+        : t('Automatic backups are off.');
       autoBackupList.append(li);
       return;
     }
@@ -2465,19 +2495,19 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       meta.className = 'dest-meta';
       meta.textContent = `${Math.max(1, Math.round(b.size / 1024))} KB`;
       li.append(name, meta);
-      li.append(adminActionBtn('💾 Download', 'Download this backup', () => downloadBackup(
+      li.append(adminActionBtn(t('💾 Download'), t('Download this backup'), () => downloadBackup(
         `/api/admin/backups/${encodeURIComponent(b.name)}`, b.name, autoBackupStatus)));
-      li.append(adminActionBtn('↩️ Restore', 'Roll the whole server back to this backup', async () => {
-        if (!confirm(`Roll the whole server back to ${prettyDate(b.date)}? Everything since then — accounts, wheels, history, settings — is replaced.`)) return;
-        autoBackupStatus.textContent = '⏳ Restoring…';
+      li.append(adminActionBtn(t('↩️ Restore'), t('Roll the whole server back to this backup'), async () => {
+        if (!confirm(t(`Roll the whole server back to {date}? Everything since then — accounts, wheels, history, settings — is replaced.`, { date: prettyDate(b.date) }))) return;
+        autoBackupStatus.textContent = t('⏳ Restoring…');
         try {
           const res = await rootApi(`/admin/backups/${encodeURIComponent(b.name)}/restore`, { method: 'POST' });
           if (res.relogin) {
-            alert('Backup restored. Your account isn\'t in this backup, so please log in again.');
+            alert(t('Backup restored. Your account isn\'t in this backup, so please log in again.'));
             forceLogout();
             return;
           }
-          autoBackupStatus.textContent = '✅ Restored.';
+          autoBackupStatus.textContent = t('✅ Restored.');
           me = await rootApi('/me');
           applyMe();
           renderAdminUsers(await rootApi('/admin/users'));
@@ -2499,12 +2529,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   }
 
   autoBackupSaveBtn.addEventListener('click', async () => {
-    autoBackupStatus.textContent = '⏳ Saving…';
+    autoBackupStatus.textContent = t('⏳ Saving…');
     try {
       renderAutoBackups(await rootApi('/admin/backups', {
         method: 'PUT', body: JSON.stringify({ keep: Number(autoBackupKeep.value) }),
       }));
-      autoBackupStatus.textContent = '✅ Saved.';
+      autoBackupStatus.textContent = t('✅ Saved.');
     } catch (err) {
       autoBackupStatus.textContent = `⚠️ ${err.message}`;
     }
@@ -2535,21 +2565,20 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const li = document.createElement('li');
       const name = document.createElement('span');
       name.className = 'dest-name';
-      name.textContent = `${u.admin ? '🛡️' : '👤'} ${u.name}${u.id === me.user.id ? ' (you)' : ''}`;
+      name.textContent = `${u.admin ? '🛡️' : '👤'} ${u.id === me.user.id ? t('{name} (you)', { name: u.name }) : u.name}`;
       const meta = document.createElement('span');
       meta.className = 'dest-meta';
-      const wheels = `${u.wheel_count} wheel${u.wheel_count === 1 ? '' : 's'}`;
-      const bits = [u.email ? `✉️ ${u.email}` : '✉️ no e-mail', wheels];
-      if (u.sso_linked) bits.push('🔗 SSO');
-      if (!u.has_password) bits.push('no password');
-      if (u.sharing_with.length) bits.push(`shares with ${u.sharing_with.join(', ')}`);
+      const wheels = tn(u.wheel_count, '1 wheel', '{n} wheels');
+      const bits = [u.email ? `✉️ ${u.email}` : t('✉️ no e-mail'), wheels];
+      if (u.sso_linked) bits.push(t('🔗 SSO'));
+      if (!u.has_password) bits.push(t('no password'));
+      if (u.sharing_with.length) bits.push(t('shares with {names}', { names: u.sharing_with.join(', ') }));
       meta.textContent = bits.join(' · ');
       li.append(name, meta);
 
       // E-mail first: it's what matches an account to its sign-on identity
-      li.append(adminActionBtn('✉️ E-mail', 'Set or change this account\'s e-mail address', () => {
-        const email = prompt(`E-mail address for ${u.name} (leave empty to remove it).\n`
-          + 'They can log in with it, and it links their account the first time they use single sign-on.',
+      li.append(adminActionBtn(t('✉️ E-mail'), t('Set or change this account\'s e-mail address'), () => {
+        const email = prompt(t('E-mail address for {name} (leave empty to remove it).\nThey can log in with it, and it links their account the first time they use single sign-on.', { name: u.name }),
         u.email || '');
         if (email === null) return;
         adminAction(rootApi(`/admin/users/${u.id}/email`, {
@@ -2558,29 +2587,27 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         }));
       }));
       if (u.sso_linked) {
-        li.append(adminActionBtn('Unlink SSO', 'Detach this account from its sign-on identity', () => {
-          if (!confirm(`Unlink ${u.name} from single sign-on? Their next sign-on matches by e-mail again.`)) return;
+        li.append(adminActionBtn(t('Unlink SSO'), t('Detach this account from its sign-on identity'), () => {
+          if (!confirm(t(`Unlink {name} from single sign-on? Their next sign-on matches by e-mail again.`, { name: u.name }))) return;
           adminAction(rootApi(`/admin/users/${u.id}/unlink-sso`, { method: 'POST' }));
         }));
       }
 
       if (u.id !== me.user.id) {
         li.append(adminActionBtn(
-          u.admin ? 'Remove admin' : 'Make admin',
-          u.admin ? 'Take away admin rights' : 'Give admin rights',
+          u.admin ? t('Remove admin') : t('Make admin'),
+          u.admin ? t('Take away admin rights') : t('Give admin rights'),
           () => adminAction(rootApi(`/admin/users/${u.id}`, {
             method: 'PUT',
             body: JSON.stringify({ admin: !u.admin }),
           }))
         ));
-        if (!me.sso || me.sso.password_login !== false) li.append(adminActionBtn('🔑 Reset password',
-          'Set a temporary password and log them out everywhere', async () => {
-            const pw = prompt(`Set a temporary password for ${u.name} (at least 8 characters).\n`
-              + `They'll be logged out on every device and come back in with it — `
-              + `then they can change it themselves.`);
+        if (!me.sso || me.sso.password_login !== false) li.append(adminActionBtn(t('🔑 Reset password'),
+          t('Set a temporary password and log them out everywhere'), async () => {
+            const pw = prompt(t("Set a temporary password for {name} (at least 8 characters).\nThey'll be logged out on every device and come back in with it — then they can change it themselves.", { name: u.name }));
             if (pw === null) return; // cancelled
             if (pw.length < 8) {
-              adminError.textContent = '⚠️ That password is too short — at least 8 characters.';
+              adminError.textContent = t('⚠️ That password is too short — at least 8 characters.');
               return;
             }
             adminError.textContent = '';
@@ -2589,19 +2616,19 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
                 method: 'PUT',
                 body: JSON.stringify({ new: pw }),
               });
-              adminError.textContent = `✅ ${u.name}'s password was reset — pass the new one along.`;
+              adminError.textContent = t(`✅ {name}'s password was reset — pass the new one along.`, { name: u.name });
             } catch (err) {
               adminError.textContent = `⚠️ ${err.message}`;
             }
           }));
         if (u.sharing_with.length) {
-          li.append(adminActionBtn('Unshare', 'Pull them out of every wheel they share', () => {
-            if (!confirm(`Pull ${u.name} out of every wheel they share with ${u.sharing_with.join(', ')}? They keep their account and any wheels of their own.`)) return;
+          li.append(adminActionBtn(t('Unshare'), t('Pull them out of every wheel they share'), () => {
+            if (!confirm(t('Pull {name} out of every wheel they share with {names}? They keep their account and any wheels of their own.', { name: u.name, names: u.sharing_with.join(', ') }))) return;
             adminAction(rootApi(`/admin/users/${u.id}/unshare`, { method: 'POST' }));
           }));
         }
-        li.append(adminActionBtn('✕ Delete', 'Delete this account for good', () => {
-          if (!confirm(`Delete ${u.name}'s account for good? Wheels they share with others stay with the others.`)) return;
+        li.append(adminActionBtn(t('✕ Delete'), t('Delete this account for good'), () => {
+          if (!confirm(t(`Delete {name}'s account for good? Wheels they share with others stay with the others.`, { name: u.name }))) return;
           adminAction(rootApi(`/admin/users/${u.id}`, { method: 'DELETE' }));
         }));
       }
@@ -2621,7 +2648,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   async function fetchVersion() {
     const res = await fetch('/api/version');
-    if (!res.ok) throw new Error(`Server said ${res.status}`);
+    if (!res.ok) throw new Error(t(`Server said {status}`, { status: res.status }));
     return res.json();
   }
 
@@ -2638,22 +2665,22 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     // Footer: prefer the release number; fall back to the commit hash so a
     // git checkout without a version file still shows something.
     const footerBits = [];
-    if (ver) footerBits.push(`running ${ver}`);
-    else if (v.commit) footerBits.push(`running ${v.commit}`);
-    if (when) footerBits.push(`last updated ${when}`);
+    if (ver) footerBits.push(t('running {ver}', { ver }));
+    else if (v.commit) footerBits.push(t('running {ver}', { ver: v.commit }));
+    if (when) footerBits.push(t(`last updated {when}`, { when }));
     footerVersion.textContent = footerBits.join(' · ');
 
     // Admin panel: the fuller picture — commit detail only matters for a
     // source checkout; a container is fully described by its version.
-    let line = ver ? `Currently running ${ver}` : 'Currently running';
+    let line = ver ? t('Currently running {ver}', { ver }) : t('Currently running');
     if (v.deployment === 'docker') {
-      line += ' (container).';
+      line += ` ${t('(container)')}.`;
     } else {
       if (v.commit) {
-        line += ver ? ` · commit ${v.commit}` : ` commit ${v.commit}`;
+        line += ` · ${t('commit {commit}', { commit: v.commit })}`;
         if (v.commit_subject) line += ` (“${v.commit_subject}”)`;
       }
-      if (when) line += ` · last updated ${when}`;
+      if (when) line += ` · ${t('last updated {when}', { when })}`;
       line += '.';
     }
     adminVersion.textContent = line;
@@ -2668,8 +2695,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     adminUpdateBtn.hidden = docker;
     adminUpdateCmd.hidden = !docker;
     adminUpdateHint.textContent = docker
-      ? '🐳 Container deployment — to update, pull the newer image and recreate the container:'
-      : 'Fetch the latest version from git and restart the server. Needs the updater units from deploy/ installed.';
+      ? t('🐳 Container deployment — to update, pull the newer image and recreate the container:')
+      : t('Fetch the latest version from git and restart the server. Needs the updater units from deploy/ installed.');
   }
 
   async function loadVersion() {
@@ -2684,14 +2711,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function watchUpdate(baseline) {
     clearInterval(updateTimer);
     const startedAt = Date.now();
-    updateStatus.textContent = '⏳ Update requested — waiting for the server to pull the latest version and restart…';
+    updateStatus.textContent = t('⏳ Update requested — waiting for the server to pull the latest version and restart…');
     updateTimer = setInterval(async () => {
       let v;
       try {
         v = await fetchVersion();
       } catch {
         // unreachable mid-restart — that's expected, keep polling
-        updateStatus.textContent = '🔄 Server is restarting…';
+        updateStatus.textContent = t('🔄 Server is restarting…');
         return;
       }
       if (!baseline || v.server_started !== baseline.server_started) {
@@ -2700,8 +2727,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         serverVersion = v;
         renderVersion();
         updateStatus.textContent = !baseline || v.commit !== baseline.commit
-          ? `✅ Updated! Now running ${v.commit}${v.commit_subject ? ` (“${v.commit_subject}”)` : ''}.`
-          : '✅ Server restarted — it was already on the latest version.';
+          ? t('✅ Updated! Now running {commit}.', { commit: v.commit + (v.commit_subject ? ` (“${v.commit_subject}”)` : '') })
+          : t('✅ Server restarted — it was already on the latest version.');
         checkForUpdate(true); // refresh the badge now we've moved
         return;
       }
@@ -2709,14 +2736,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         clearInterval(updateTimer);
         adminUpdateBtn.disabled = false;
         updateStatus.textContent = v.update_pending
-          ? '⚠️ Nothing picked up the update request — are the updater units from deploy/ installed and enabled?'
-          : '⚠️ The update request was picked up, but the server never restarted — the git pull may have failed. Check `journalctl -u wheel-of-choice-update` on the server.';
+          ? t('⚠️ Nothing picked up the update request — are the updater units from deploy/ installed and enabled?')
+          : t('⚠️ The update request was picked up, but the server never restarted — the git pull may have failed. Check `journalctl -u wheel-of-choice-update` on the server.');
       }
     }, UPDATE_POLL_MS);
   }
 
   adminUpdateBtn.addEventListener('click', async () => {
-    if (!confirm('Pull the latest version from git and restart the server? Everyone is briefly disconnected.')) return;
+    if (!confirm(t('Pull the latest version from git and restart the server? Everyone is briefly disconnected.'))) return;
     adminError.textContent = '';
     updateStatus.textContent = '';
     adminUpdateBtn.disabled = true;
@@ -2751,14 +2778,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     adminUpdateAvailable.hidden = false;
     if (available) {
       adminUpdateAvailable.textContent = docker
-        ? `🆕 Version ${info.latest} is available — you're running ${info.current}. `
-          + 'Pull the new image to update (see below).'
-        : `🆕 A newer version is on git (${info.latest} on ${info.branch}) — `
-          + `you're running ${info.current}. Hit “Update & restart” to pull it.`;
+        ? t(`🆕 Version {latest} is available — you're running {current}. Pull the new image to update (see below).`, { latest: info.latest, current: info.current })
+        : t(`🆕 A newer version is on git ({latest} on {branch}) — you're running {current}. Hit “Update & restart” to pull it.`, { latest: info.latest, branch: info.branch, current: info.current });
     } else {
       adminUpdateAvailable.textContent = docker
-        ? '✅ Running the latest release.'
-        : '✅ Up to date with the git remote.';
+        ? t('✅ Running the latest release.')
+        : t('✅ Up to date with the git remote.');
     }
   }
 
@@ -2834,8 +2859,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       ctx.textAlign = 'center';
       ctx.textBaseline = 'middle';
       const empty = isTravelWheel()
-        ? ['No destinations match', '— loosen the filters!']
-        : ['Nothing on the wheel yet', '— add some restaurants!'];
+        ? [t('No destinations match'), t('— loosen the filters!')]
+        : [t('Nothing on the wheel yet'), t('— add some restaurants!')];
       ctx.fillText(empty[0], cx, cy - size * 0.03);
       ctx.fillText(empty[1], cx, cy + size * 0.03);
       return;
@@ -2925,7 +2950,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
     spinning = true;
     spinBtn.disabled = true;
-    wheelHint.textContent = 'Round and round it goes… 🤞';
+    wheelHint.textContent = t('Round and round it goes… 🤞');
 
     // With reduced motion the wheel takes a shorter, calmer spin instead of
     // the long dramatic one — but it's still a real, several-turn spin, not a
@@ -2966,7 +2991,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (!isTravelWheel()) return [];
     const slug = encodeURIComponent(name.replace(/ /g, '_'));
     return [
-      { label: 'Wikivoyage travel guide', url: `https://en.wikivoyage.org/wiki/${slug}` },
+      { label: t('Wikivoyage travel guide'), url: `https://en.wikivoyage.org/wiki/${slug}` },
       { label: 'Wikipedia', url: `https://en.wikipedia.org/wiki/${slug}` },
     ];
   }
@@ -2999,12 +3024,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function planLinks(name, location) {
     if (!isTravelWheel()) {
       return [
-        { label: '📍 Find it on Maps', url: mapsSearchUrl(name, location) },
+        { label: t('📍 Find it on Maps'), url: mapsSearchUrl(name, location) },
       ];
     }
     return [
-      { label: '✈️ Flights', url: `https://www.google.com/travel/flights?q=${encodeURIComponent(`flights to ${name}`)}` },
-      { label: '🛏️ Stays', url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(name)}` },
+      { label: t('✈️ Flights'), url: `https://www.google.com/travel/flights?q=${encodeURIComponent(`flights to ${name}`)}` },
+      { label: t('🛏️ Stays'), url: `https://www.booking.com/searchresults.html?ss=${encodeURIComponent(name)}` },
     ];
   }
 
@@ -3039,7 +3064,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const name = d ? d.name : historyItem.name;
     infoFlag.textContent = d ? d.flag : historyItem.flag;
     infoName.textContent = name;
-    infoTags.textContent = d ? describe(d) : 'No longer on this wheel';
+    infoTags.textContent = d ? describe(d) : t('No longer on this wheel');
     setLocationLine(infoLocation, d);
     const notes = d && d.notes;
     infoNotes.hidden = !notes;
@@ -3115,14 +3140,14 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function describe(d) {
     if (!isTravelWheel()) {
       return starCount(d) >= 2
-        ? `🌟 starred by ${starCount(d)} of you`
-        : (isFavorite(d) ? '⭐ favourite' : '');
+        ? t(`🌟 starred by {count} of you`, { count: starCount(d) })
+        : (isFavorite(d) ? t('⭐ favourite') : '');
     }
     const parts = [
-      starCount(d) >= 2 ? `🌟 starred by ${starCount(d)} of you` : (isFavorite(d) ? '⭐ favourite' : ''),
-      BUDGET_LABELS[d.budget],
-      DISTANCE_LABELS[d.distance],
-      d.vibes.map((v) => VIBE_LABELS[v]).join(' · '),
+      starCount(d) >= 2 ? t(`🌟 starred by {count} of you`, { count: starCount(d) }) : (isFavorite(d) ? t('⭐ favourite') : ''),
+      t(BUDGET_LABELS[d.budget]),
+      t(DISTANCE_LABELS[d.distance]),
+      d.vibes.map((v) => t(VIBE_LABELS[v])).join(' · '),
     ];
     return parts.filter(Boolean).join('  ·  ');
   }
@@ -3139,8 +3164,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (isTravelWheel()) {
       vetoBtn.disabled = state.round.my_veto_used;
       vetoNote.textContent = state.round.my_veto_used
-        ? 'You\'ve already used your veto this round — the wheel has spoken!'
-        : 'Each of you gets one veto per round — yours is still up your sleeve.';
+        ? t('You\'ve already used your veto this round — the wheel has spoken!')
+        : t('Each of you gets one veto per round — yours is still up your sleeve.');
     }
     resultModal.showModal();
     launchConfetti();
@@ -3175,7 +3200,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
           if (entry) openPollModal(entry, 'propose');
         }
       } else {
-        wheelHint.textContent = `Waiting for ${waitingNames(res.round.pending)} to okay ${result.flag} ${result.name} — they can still veto ✋`;
+        wheelHint.textContent = t(`Waiting for {names} to okay {flag} {name} — they can still veto ✋`, { names: waitingNames(res.round.pending), flag: result.flag, name: result.name });
       }
     } catch (err) {
       console.error(err);
@@ -3203,7 +3228,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (currentSegments.length > 0) {
       spin();
     } else {
-      wheelHint.textContent = 'Nothing left after that veto — loosen the filters or start over.';
+      wheelHint.textContent = t('Nothing left after that veto — loosen the filters or start over.');
     }
   });
 
@@ -3220,17 +3245,17 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     pendingBanner.hidden = !p;
     if (!p) return;
     if (p.mine) {
-      pendingText.textContent = `⏳ You picked ${p.flag} ${p.name} — waiting for ${waitingNames(p)} to give it a thumbs-up.`;
+      pendingText.textContent = t(`⏳ You picked {flag} {name} — waiting for {names} to give it a thumbs-up.`, { flag: p.flag, name: p.name, names: waitingNames(p) });
       pendingActions.hidden = true;
     } else if (p.i_confirmed) {
-      pendingText.textContent = `👍 You're in for ${p.flag} ${p.name} — waiting for ${waitingNames(p)}.`;
+      pendingText.textContent = t(`👍 You're in for {flag} {name} — waiting for {names}.`, { flag: p.flag, name: p.name, names: waitingNames(p) });
       pendingActions.hidden = true;
     } else {
-      pendingText.textContent = `🎡 ${p.by_name} spun ${p.flag} ${p.name}! Are you in — or is this your veto?`;
+      pendingText.textContent = t(`🎡 {by_name} spun {flag} {name}! Are you in — or is this your veto?`, { by_name: p.by_name, flag: p.flag, name: p.name });
       pendingActions.hidden = false;
       pendingVetoBtn.disabled = state.round.my_veto_used;
       pendingVetoBtn.title = state.round.my_veto_used
-        ? 'You already used your veto this round' : '';
+        ? t('You already used your veto this round') : '';
     }
   }
 
@@ -3244,7 +3269,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         renderHistory();
         wheelHint.textContent = finalMessage(p);
       } else {
-        wheelHint.textContent = `You're in! Still waiting for ${waitingNames(res.round.pending)} to okay ${p.flag} ${p.name}.`;
+        wheelHint.textContent = t(`You're in! Still waiting for {names} to okay {flag} {name}.`, { names: waitingNames(res.round.pending), flag: p.flag, name: p.name });
       }
       applyRound(res.round);
     } catch (err) {
@@ -3261,7 +3286,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         method: 'POST',
         body: JSON.stringify({ dest_id: p.dest_id }),
       }));
-      wheelHint.textContent = `You vetoed ${p.flag} ${p.name} 🙅 — give it another spin!`;
+      wheelHint.textContent = t(`You vetoed {flag} {name} 🙅 — give it another spin!`, { flag: p.flag, name: p.name });
     } catch (err) {
       console.error(err);
       wheelHint.textContent = `⚠️ ${err.message}`;
@@ -3380,17 +3405,17 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   syncCatalogBtn.addEventListener('click', async () => {
     syncCatalogBtn.disabled = true;
     syncCatalogStatus.hidden = false;
-    syncCatalogStatus.textContent = 'Checking the catalogue…';
+    syncCatalogStatus.textContent = t('Checking the catalogue…');
     try {
       const res = await api('/destinations/sync', { method: 'POST' });
       state.destinations = res.destinations;
       renderDestList();
       syncCatalogStatus.textContent = res.added
-        ? `✅ Added ${res.added} new ${res.added === 1 ? 'place' : 'places'} — scroll down to find them.`
-        : '👍 You’re already up to date — nothing new in the catalogue.';
+        ? tn(res.added, '✅ Added 1 new place — scroll down to find them.', '✅ Added {n} new places — scroll down to find them.')
+        : t('👍 You’re already up to date — nothing new in the catalogue.');
     } catch (err) {
       console.error(err);
-      syncCatalogStatus.textContent = '⚠️ Could not reach the server — try again in a moment.';
+      syncCatalogStatus.textContent = t('⚠️ Could not reach the server — try again in a moment.');
     } finally {
       syncCatalogBtn.disabled = false;
     }
@@ -3412,7 +3437,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const checkbox = document.createElement('input');
       checkbox.type = 'checkbox';
       checkbox.checked = d.enabled;
-      checkbox.title = 'On the wheel?';
+      checkbox.title = t('On the wheel?');
       checkbox.addEventListener('change', async () => {
         try {
           const updated = await patchDestination(d.id, { enabled: checkbox.checked });
@@ -3427,7 +3452,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const star = document.createElement('button');
       star.type = 'button';
       star.className = 'star-btn';
-      star.title = 'Star it (your star) — every member\'s star widens this slice of the wheel';
+      star.title = t('Star it (your star) — every member\'s star widens this slice of the wheel');
       const paintStar = () => {
         star.textContent = starIcon(d);
         star.classList.toggle('starred', isFavorite(d));
@@ -3443,30 +3468,30 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const name = document.createElement('button');
       name.type = 'button';
       name.className = 'dest-name';
-      name.title = 'Info & links about this place';
+      name.title = t('Info & links about this place');
       name.textContent = `${d.flag} ${d.name}`;
       name.addEventListener('click', () => showInfoModal(d, null));
 
       const meta = document.createElement('span');
       meta.className = 'dest-meta';
       meta.textContent = isTravelWheel()
-        ? `${d.budget} · ${DISTANCE_LABELS[d.distance]}`
+        ? `${d.budget} · ${t(DISTANCE_LABELS[d.distance])}`
         : (d.notes ? d.notes.slice(0, 40) : '');
 
       const edit = document.createElement('button');
       edit.type = 'button';
       edit.className = 'edit-btn';
-      edit.title = 'Edit this entry';
+      edit.title = t('Edit this entry');
       edit.textContent = '✏️';
       edit.addEventListener('click', () => enterEditMode(d));
 
       const del = document.createElement('button');
       del.type = 'button';
       del.className = 'del-btn';
-      del.title = 'Remove this entry';
+      del.title = t('Remove this entry');
       del.textContent = '✕';
       del.addEventListener('click', async () => {
-        if (!confirm(`Remove ${d.name} for good?`)) return;
+        if (!confirm(t(`Remove {name} for good?`, { name: d.name }))) return;
         try {
           await api(`/destinations/${d.id}`, { method: 'DELETE' });
           state.destinations = state.destinations.filter((x) => x.id !== d.id);
@@ -3525,7 +3550,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     addPlace = place;
     if (place.address) addLocation.value = place.address;  // programmatic → no 'input' event
     clearMapsResults();
-    setMapsNote(`📍 Linked to ${place.name || place.address}`, 'ok');
+    setMapsNote(t(`📍 Linked to {address}`, { address: place.name || place.address }), 'ok');
   }
 
   async function runMapsSearch() {
@@ -3537,11 +3562,11 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       return;
     }
     clearMapsResults();
-    setMapsNote('🔍 Searching…');
+    setMapsNote(t('🔍 Searching…'));
     addLocationSearch.disabled = true;
     try {
       const { results } = await rootApi(`/maps/search?q=${encodeURIComponent(q)}`);
-      if (!results.length) { setMapsNote('No places found — try the name with the town.'); return; }
+      if (!results.length) { setMapsNote(t('No places found — try the name with the town.')); return; }
       setMapsNote('');
       for (const r of results) {
         const li = document.createElement('li');
@@ -3594,7 +3619,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const label = document.createElement('input');
     label.type = 'text';
     label.className = 'link-label';
-    label.placeholder = 'Label, e.g. Our hotel';
+    label.placeholder = t('Label, e.g. Our hotel');
     label.maxLength = 60;
     label.value = link.label || '';
     const url = document.createElement('input');
@@ -3606,7 +3631,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     const del = document.createElement('button');
     del.type = 'button';
     del.className = 'del-btn';
-    del.title = 'Remove this link';
+    del.title = t('Remove this link');
     del.textContent = '✕';
     del.addEventListener('click', () => row.remove());
     row.append(label, url, del);
@@ -3628,8 +3653,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function enterEditMode(d) {
     state.editingId = d.id;
-    formTitle.textContent = `Edit ${d.name}`;
-    formSubmit.textContent = '💾 Save changes';
+    formTitle.textContent = t(`Edit {name}`, { name: d.name });
+    formSubmit.textContent = t('💾 Save changes');
     cancelEditBtn.hidden = false;
     addNameInput.value = d.name;
     addFlagInput.value = d.flag;
@@ -3643,7 +3668,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       addLocation.value = d.location || '';
       addPlace = d.place || null;
       clearMapsResults();
-      setMapsNote(addPlace ? `📍 Linked to ${addPlace.name || addPlace.address}` : '', addPlace ? 'ok' : '');
+      setMapsNote(addPlace ? t(`📍 Linked to {address}`, { address: addPlace.name || addPlace.address }) : '', addPlace ? 'ok' : '');
     }
     addNotes.value = d.notes || '';
     linkRows.innerHTML = '';
@@ -3654,8 +3679,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   function exitEditMode() {
     state.editingId = null;
-    formTitle.textContent = 'Add your own';
-    formSubmit.textContent = '➕ Add it';
+    formTitle.textContent = t('Add your own');
+    formSubmit.textContent = t('➕ Add it');
     cancelEditBtn.hidden = true;
     addForm.reset();
     linkRows.innerHTML = '';
@@ -3695,7 +3720,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       renderDestList();
     } catch (err) {
       console.error(err);
-      alert('Could not save it — is the server still running?');
+      alert(t('Could not save it — is the server still running?'));
     }
   });
 
@@ -3706,7 +3731,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (state.history.length === 0) {
       const li = document.createElement('li');
       li.className = 'history-empty';
-      li.textContent = 'Nothing picked yet — give it a spin!';
+      li.textContent = t('Nothing picked yet — give it a spin!');
       historyList.append(li);
       return;
     }
@@ -3717,7 +3742,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const name = document.createElement('button');
       name.type = 'button';
       name.className = 'history-name';
-      name.title = 'Info & links for this pick';
+      name.title = t('Info & links for this pick');
       name.textContent = `${item.flag} ${item.name}`;
       name.addEventListener('click', () => openDestInfo(item));
       main.append(name);
@@ -3737,9 +3762,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const badge = item.status === 'booked' ? '📅 ' : (item.status === 'visited' ? '✅ ' : '');
       when.textContent = badge + new Date(item.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
       const titleBits = [];
-      if (item.by) titleBits.push(`Picked by ${item.by}`);
+      if (item.by) titleBits.push(t(`Picked by {by}`, { by: item.by }));
       if (item.status === 'booked') titleBits.push('booked');
-      if (item.status === 'visited') titleBits.push('been there');
+      if (item.status === 'visited') titleBits.push(t('been there'));
       if (item.trip_date) titleBits.push(`trip: ${item.trip_date}`);
       if (titleBits.length) when.title = titleBits.join(' · ');
       li.append(main, when);
@@ -3753,30 +3778,30 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   function pollStatusChip(item) {
     const poll = item.poll;
     if (!poll) {
-      return { text: '📅 No date yet — start a poll', cls: 'todo',
+      return { text: t('📅 No date yet — start a poll'), cls: 'todo',
         act: () => openPollModal(item, 'propose') };
     }
     if (poll.status === 'locked') {
-      return { text: `🗓️ ${prettyDate(poll.locked_date)} — it's a date`, cls: 'locked',
+      return { text: t(`🗓️ {date} — it's a date`, { date: prettyDate(poll.locked_date) }), cls: 'locked',
         act: () => openDestInfo(item) };
     }
     if (!Array.isArray(poll.my_dates)) {  // this member hasn't voted yet
-      return { text: '🗳️ Vote on a date', cls: 'vote',
+      return { text: t('🗳️ Vote on a date'), cls: 'vote',
         act: () => openPollModal(item, 'vote') };
     }
     if (poll.unanimous && poll.unanimous.length && !poll.waiting_names.length) {
-      return { text: '✅ Everyone\'s free — lock a date in', cls: 'vote',
+      return { text: t('✅ Everyone\'s free — lock a date in'), cls: 'vote',
         act: () => openPollModal(item, 'vote') };
     }
     const waiting = poll.waiting_names.length
-      ? `waiting for ${poll.waiting_names.join(' & ')}`
-      : 'no evening works for all yet';
-    return { text: `🗳️ Poll open — ${waiting}`, cls: 'waiting',
+      ? t('waiting for {names}', { names: poll.waiting_names.join(' & ') })
+      : t('no evening works for all yet');
+    return { text: t(`🗳️ Poll open — {waiting}`, { waiting }), cls: 'waiting',
       act: () => openPollModal(item, 'vote') };
   }
 
   clearHistoryBtn.addEventListener('click', async () => {
-    if (!confirm('Clear the whole spin history? This clears it for everyone on this wheel.')) return;
+    if (!confirm(t('Clear the whole spin history? This clears it for everyone on this wheel.'))) return;
     try {
       await api('/history', { method: 'DELETE' });
       state.history = [];
@@ -3792,11 +3817,12 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     currentSegments = eligibleDestinations();
     const n = currentSegments.length;
     const favs = currentSegments.filter(isFavorite).length;
-    const noun = wheelMeta(currentWheel()).noun;
     matchCount.textContent = n === 0
-      ? (isTravelWheel() ? 'No matches — loosen a filter or two' : 'Nothing on the wheel yet — add some spots below')
-      : (n === 1 ? `1 ${noun} on the wheel` : `${n} ${noun}s on the wheel`) +
-        (favs > 0 ? ` · ⭐ ${favs} favourite${favs === 1 ? '' : 's'} with extra chance` : '');
+      ? (isTravelWheel() ? t('No matches — loosen a filter or two') : t('Nothing on the wheel yet — add some spots below'))
+      : (isTravelWheel()
+        ? tn(n, '1 destination on the wheel', '{n} destinations on the wheel')
+        : tn(n, '1 restaurant on the wheel', '{n} restaurants on the wheel')) +
+        (favs > 0 ? ` · ${tn(favs, '⭐ 1 favourite with extra chance', '⭐ {n} favourites with extra chance')}` : '');
     spinBtn.disabled = n === 0 || spinning;
     drawWheel();
   }
@@ -3810,7 +3836,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   } else if (token) {
     fetchMe().then(() => {
       // back from linking single sign-on (or failing to) — show the outcome
-      if (me && (ssoResult === 'linked' || ssoError)) openAccount(ssoError ? '' : '✅ Single sign-on linked', ssoError);
+      if (me && (ssoResult === 'linked' || ssoError)) openAccount(ssoError ? '' : t('✅ Single sign-on linked'), ssoError);
     });
   } else {
     if (ssoError) authError.textContent = `⚠️ ${ssoError}`;
@@ -3818,8 +3844,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (inviteCode) {
       document.querySelector('.auth-tabs .tab[data-mode="register"]').click();
       inviteBanner.textContent = accountInvite
-        ? `🎟️ You've been invited to Wheel of Choice — create your account below.`
-        : `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
+        ? t(`🎟️ You've been invited to Wheel of Choice — create your account below.`)
+        : t(`🎟️ You've been invited to a shared wheel (code {inviteCode}) — create an account and you'll join it automatically.`, { inviteCode });
       inviteBanner.hidden = false;
       rootApi('/config').then(applyAuthConfig).catch(() => {});
     } else {
@@ -3839,22 +3865,22 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   setupRestoreFile.addEventListener('change', async () => {
     const file = setupRestoreFile.files[0];
     if (!file) return;
-    setupRestoreStatus.textContent = '⏳ Restoring…';
+    setupRestoreStatus.textContent = t('⏳ Restoring…');
     setupRestoreBtn.disabled = true;
     try {
       const text = await file.text();
       JSON.parse(text); // catch garbage before it travels
       const res = await rootApi('/setup/restore', { method: 'POST', body: text });
       setupRestoreStatus.textContent = res.files.includes('vapid-private-key.pem')
-        ? '✅ Restored, push key included — log in with your usual account.'
-        : '✅ Restored — log in with your usual account. (This older backup had no push key: phones need to switch notifications on again.)';
+        ? t('✅ Restored, push key included — log in with your usual account.')
+        : t('✅ Restored — log in with your usual account. (This older backup had no push key: phones need to switch notifications on again.)');
       document.querySelector('.auth-tabs .tab[data-mode="login"]').click();
       applyRegistrationGate();
       setupRestore.hidden = false; // keep the success message in view
       setupRestoreBtn.hidden = true;
     } catch (err) {
       setupRestoreStatus.textContent = err instanceof SyntaxError
-        ? '⚠️ That file isn\'t a Wheel of Choice backup.'
+        ? t('⚠️ That file isn\'t a Wheel of Choice backup.')
         : `⚠️ ${err.message}`;
     } finally {
       setupRestoreBtn.disabled = false;
@@ -3877,7 +3903,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (registerTab) registerTab.hidden = !open;
     if (!open) {
       document.querySelector('.auth-tabs .tab[data-mode="login"]').click(); // land on the login form
-      authHint.textContent = 'This server is invite-only — ask an admin for an invite link to create an account.';
+      authHint.textContent = t('This server is invite-only — ask an admin for an invite link to create an account.');
     }
   }
 })();

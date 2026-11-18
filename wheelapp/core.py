@@ -4,8 +4,7 @@ import threading
 from pathlib import Path
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from flask import Flask, jsonify
-from werkzeug.exceptions import HTTPException
+from flask import Flask
 
 try:  # push notifications are optional — everything else works without
     from pywebpush import WebPushException, webpush
@@ -236,7 +235,3 @@ def security_headers(response):
     return response
 
 
-@app.errorhandler(HTTPException)
-def as_json(err):
-    """The frontend shows API error messages to the user — send JSON."""
-    return jsonify(error=err.description), err.code

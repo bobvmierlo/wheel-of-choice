@@ -18,6 +18,10 @@
 <body>
 
   <header class="site-header">
+    <label class="lang-picker" id="lang-picker" hidden>
+      <span class="visually-hidden">Language</span>
+      <select id="lang-select" translate="no"></select>
+    </label>
     <div class="account-bar" id="account-bar" hidden>
       <span class="account-name" id="account-name"></span>
       <button type="button" class="btn btn-ghost btn-small" id="admin-btn" hidden>🛠️ Admin<span class="update-dot" id="admin-update-dot" hidden title="A newer version is available">🆕</span></button>
@@ -185,10 +189,7 @@
   <section class="gate" id="welcome-view" hidden>
     <div class="gate-card onboard-card">
       <h2>Welcome aboard 🎉</h2>
-      <p class="gate-sub">You've joined <span id="welcome-partner"></span>'s wheel
-        <strong id="welcome-wheel"></strong>. Now star the entries <em>you</em> dream of —
-        starred entries get a bigger slice of the wheel, and every extra star from
-        another member 🌟 widens it further.</p>
+      <p class="gate-sub" id="welcome-intro"></p>
       <input type="text" id="welcome-search" class="fav-search" placeholder="🔍 Type to filter the list…" autocomplete="off">
       <div class="fav-picker" id="welcome-picker">
         <div class="segmented" id="welcome-list"></div>
