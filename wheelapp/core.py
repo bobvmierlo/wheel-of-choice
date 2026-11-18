@@ -58,7 +58,10 @@ DATA_DIR = Path(
     os.environ.get("WHEEL_DATA_DIR")
     or os.environ.get("HOLIDAY_DATA_DIR", str(ROOT / "data"))
 )
-DB_FILE = DATA_DIR / "db.json"
+# The database: SQLite since v1.2. LEGACY_DB_FILE is the single JSON file
+# earlier versions kept everything in; it's imported once (see storage).
+DB_PATH = DATA_DIR / "wheel-of-choice.sqlite3"
+LEGACY_DB_FILE = DATA_DIR / "db.json"
 UPDATE_FLAG = DATA_DIR / "update-requested"
 
 # Web Push (see the README's notifications section). The VAPID keypair

@@ -5,7 +5,6 @@ transitions the README promises: old space codes keep working, histories
 survive, and pre-account layouts become claimable wheels.
 """
 from conftest import register, write_db
-import json
 from wheelapp import accounts, core, storage
 
 
@@ -81,5 +80,8 @@ def test_migration_is_persisted_once(client):
         "history": [],
     })
     storage.load_db()
-    on_disk = json.loads(core.DB_FILE.read_text())
+    on_disk = storage._read_db()  # straight from SQLite, no migration step
     assert on_disk["version"] == 3
+    # the old file was imported and kept aside, not deleted
+    assert not core.LEGACY_DB_FILE.exists()
+    assert (core.DATA_DIR / "db.json.imported").exists()

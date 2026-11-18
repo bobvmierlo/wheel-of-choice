@@ -29,9 +29,8 @@ from wheelapp import accounts, calendars, core, updates
 @pytest.fixture
 def app():
     """A fresh, empty database for each test."""
-    if core.DB_FILE.exists():
-        core.DB_FILE.unlink()
-    # Reset in-memory caches that outlive a single db.json.
+    wipe_db_files()
+    # Reset in-memory caches that outlive the database.
     calendars._cal_cache.clear()
     with accounts._login_lock:
         accounts._login_fails.clear()
@@ -115,6 +114,16 @@ def add_entry(session, wheel_id, name="Test place", travel=False):
 
 
 def write_db(raw):
-    """Drop a raw db dict straight onto disk — for migration tests."""
+    """Drop a raw db dict onto disk as an old-style db.json — the next
+    load imports it into SQLite (and migrates it), like a real upgrade."""
+    wipe_db_files()
     core.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    core.DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
+    core.LEGACY_DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
+
+
+def wipe_db_files():
+    """No database at all — a brand-new server."""
+    for suffix in ("", "-wal", "-shm"):
+        Path(str(core.DB_PATH) + suffix).unlink(missing_ok=True)
+    for path in core.DATA_DIR.glob("db.json*"):
+        path.unlink()

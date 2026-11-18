@@ -4,7 +4,7 @@ import json
 
 import pytest
 
-from conftest import register, login, make_restaurant_wheel
+from conftest import wipe_db_files, register, login, make_restaurant_wheel
 from wheelapp import core, push
 
 PEM = None
@@ -30,7 +30,7 @@ def _key_pem():
 
 def wipe_server():
     """Simulate a blank container: no db, no key."""
-    core.DB_FILE.unlink(missing_ok=True)
+    wipe_db_files()
     core.VAPID_KEY_FILE.unlink(missing_ok=True)
     push._vapid_public_key = None
 
