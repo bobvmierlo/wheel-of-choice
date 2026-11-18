@@ -143,8 +143,9 @@ full-size.
 
 **Storage**: everything lives on the server in `data/db.json` — accounts
 (passwords stored as scrypt hashes), login sessions (expiring after 90
-days), push subscriptions, and every wheel. Only your login token stays in the browser. The
-admin panel can download that file as a backup and restore one later.
+days), push subscriptions, and every wheel. Only your login token stays in the browser. Next
+to it sits `vapid-private-key.pem`, the key that signs push notifications.
+See [Backup & restore](#-backup--restore) for moving all of it in one go.
 Older databases are migrated automatically: the shared *spaces* of v2
 are split into independent wheels (the old space code keeps working — it
 now joins the holidays wheel, and the city-trips wheel gets a fresh code
@@ -376,8 +377,10 @@ per wheel:
 - *No permission prompt on an iPhone* — the app wasn't opened from the
   Home Screen icon, or iOS is older than 16.4.
 - *Notifications stopped after restoring a backup onto a fresh box* —
-  restore `vapid-private-key.pem` along with `db.json`, or have
-  everyone toggle 🔔 off and on again.
+  backups made from the admin panel carry the push key, so this only
+  happens with an older backup (a bare `db.json`) or a hand-copied
+  `db.json` without `vapid-private-key.pem`. Have everyone toggle 🔔 off
+  and on again.
 - *One device went quiet* — browsers rotate or expire subscriptions now
   and then. The app re-registers on every login and the server drops
   dead endpoints automatically, so a visit to the app usually heals it;
@@ -610,6 +613,25 @@ An admin can **Unlink SSO** on any account (e.g. after a mismatch); its
 next sign-on matches by e-mail again. Logging out of the app doesn't log
 you out of the provider.
 
+### Switching password log-in off
+
+Once everyone signs on through the provider, tick **🚫 Password log-in
+off** in **🛠️ Admin → Single sign-on**. The login screen then shows only
+the sign-on button; logging in, registering and changing passwords with
+a name or e-mail stop working (people already logged in stay logged in).
+The panel lists which accounts aren't linked yet; they can still get in
+through sign-on as long as their e-mail address matches.
+
+Guard rails, so the server can't lock itself out:
+
+- You can only switch it off with SSO fully configured **and your own
+  account linked** (🔑 → Single sign-on → Link).
+- If SSO stops being configured (e.g. the secret is cleared), passwords
+  come back on automatically.
+- **Break-glass**: if the provider is down or broken, restart the server
+  with `WHEEL_FORCE_PASSWORD_LOGIN=1` (e.g. in the compose
+  `environment:` block). Passwords work again until you remove it.
+
 ### Troubleshooting
 
 - *“the provider calls itself … — put exactly that in the issuer field”*
@@ -625,6 +647,30 @@ you out of the provider.
 - *Authentik says the redirect URI is invalid* — the URI in Authentik must
   match the one in the admin panel exactly; set **Public URL** if the
   admin panel shows an internal address or `http://`.
+
+## 💾 Backup & restore
+
+**🛠️ Admin → Backup → 💾 Download backup** gives you one JSON file with
+everything the server knows: accounts, wheels, history, sessions, all
+settings (single sign-on included) and the push-notification signing key
+(`vapid-private-key.pem`). It contains password hashes, the SSO client
+secret and that key, so keep it as safe as the server itself.
+
+To restore:
+
+- **On a running server**: **🛠️ Admin → Backup → 📤 Restore from
+  backup…** replaces all data. You stay logged in if your account is in
+  the backup.
+- **On a brand-new server** (e.g. a fresh container with an empty
+  volume): the very first screen offers **📤 Restore from backup…**. No
+  account is needed: upload the file, then log in as before. Phones keep
+  their notifications because the push key comes back too. This option is
+  only there while the server has no accounts at all, the same window in
+  which the first visitor could register and become admin anyway. So on
+  an internet-facing box, restore straight after starting it.
+
+Backups from older versions (a bare `db.json`) still restore; they just
+don't carry the push key, so the server keeps the one it has.
 
 ## Seed data & sources
 

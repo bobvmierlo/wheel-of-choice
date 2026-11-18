@@ -549,6 +549,8 @@ body {
 .sso-divider { display: flex; align-items: center; gap: 0.6rem; color: var(--text-dim); font-size: 0.82rem; margin: 0; }
 .sso-divider::before, .sso-divider::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: 0.35; }
 .sso-btn { width: 100%; }
+.sso-only .sso-divider { display: none; }
+.setup-restore { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.5rem; align-items: flex-start; }
 .auth-form label {
   display: flex;
   flex-direction: column;

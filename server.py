@@ -846,7 +846,8 @@ def me_payload(db, user):
 
 def sso_public(db):
     cfg = oidc_settings(db)
-    return {"enabled": cfg["enabled"], "label": cfg["button_label"]}
+    return {"enabled": cfg["enabled"], "label": cfg["button_label"],
+            "password_login": password_login_allowed(db)}
 
 
 def start_session(db, user):
@@ -888,6 +889,8 @@ def register():
             abort(400, description="that name is already taken — log in instead?")
         ensure_email_free(db, email)
         first_account = not db["users"]  # the very first account bootstraps the server
+        if not first_account:
+            require_password_login(db)
         # A code can be a wheel's share code (join that wheel) or an admin
         # account-invite (create an account, join nothing). Wheels win the
         # namespace; invites never collide with a wheel code (see below).
@@ -944,6 +947,7 @@ def login():
     password = str(payload.get("password", ""))
     with _lock:
         db = load_db()
+        require_password_login(db)
         user = user_by_login(db, ident)
         # Throttle per account, so guessing via the name and via the
         # e-mail address draws from the same allowance.
@@ -1010,6 +1014,7 @@ def change_password():
     with _lock:
         db = load_db()
         user = current_user(db)
+        require_password_login(db)
         # an SSO-only account has no password yet — it may set one freely
         if user.get("password") and not password_ok(user, current):
             abort(403, description="that's not your current password")
@@ -1029,7 +1034,8 @@ def change_email():
     with _lock:
         db = load_db()
         user = current_user(db)
-        if user.get("password") and not password_ok(user, password):
+        # with passwords switched off there's nothing to confirm with
+        if user.get("password") and password_login_allowed(db) and not password_ok(user, password):
             abort(403, description="that's not your current password")
         ensure_email_free(db, email, user["id"])
         user["email"] = email
@@ -1100,9 +1106,34 @@ def oidc_settings(db):
         "match_email": bool(stored.get("match_email", True)),
         "require_verified_email": bool(stored.get("require_verified_email", True)),
         "allow_signup": bool(stored.get("allow_signup", False)),
+        "disable_password_login": bool(stored.get("disable_password_login", False)),
     }
     cfg["enabled"] = bool(cfg["issuer"] and cfg["client_id"] and cfg["client_secret"])
     return cfg
+
+
+def password_login_forced():
+    """Break-glass switch: WHEEL_FORCE_PASSWORD_LOGIN=1 turns password
+    log-in back on regardless of the admin setting — for when the identity
+    provider is down or misconfigured and nobody can get in anymore."""
+    return os.environ.get("WHEEL_FORCE_PASSWORD_LOGIN", "").strip().lower() in ("1", "true", "yes", "on")
+
+
+def password_login_allowed(db):
+    """Whether names/e-mails + passwords work on this server right now.
+    An admin can switch it off once single sign-on is set up; it comes back
+    on by itself if SSO stops being configured (fail open — never lock the
+    whole server out), and the env var above forces it on."""
+    if password_login_forced():
+        return True
+    cfg = oidc_settings(db)
+    return not (cfg["enabled"] and cfg["disable_password_login"])
+
+
+def require_password_login(db):
+    if not password_login_allowed(db):
+        abort(403, description="passwords are switched off on this server — "
+                               "use the sign-on button instead")
 
 
 def oidc_redirect_uri(cfg):
@@ -1120,6 +1151,9 @@ def oidc_settings_view(db):
     view["client_secret_set"] = bool(cfg["client_secret"])
     view["redirect_uri"] = oidc_redirect_uri(cfg)
     view["linked_users"] = sum(1 for u in db["users"].values() if u.get("oidc_sub"))
+    view["unlinked_users"] = sorted(u["name"] for u in db["users"].values() if not u.get("oidc_sub"))
+    view["password_login"] = password_login_allowed(db)
+    view["password_login_forced"] = password_login_forced()
     return view
 
 
@@ -1450,6 +1484,9 @@ def unlink_own_sso():
     with _lock:
         db = load_db()
         user = current_user(db)
+        if not password_login_allowed(db):
+            abort(400, description="passwords are switched off on this server — "
+                                   "unlinking would lock you out")
         if not user.get("password"):
             abort(400, description="set a password first — otherwise you couldn't log in anymore")
         user.pop("oidc_sub", None)
@@ -2558,6 +2595,7 @@ def admin_reset_password(user_id):
     with _lock:
         db = load_db()
         require_admin(db)
+        require_password_login(db)
         target = db["users"].get(user_id)
         if target is None:
             abort(404, description="no such user")
@@ -2617,7 +2655,7 @@ def admin_put_sso():
     payload = request.get_json(force=True, silent=True) or {}
     with _lock:
         db = load_db()
-        require_admin(db)
+        admin = require_admin(db)
         stored = db.setdefault("settings", {}).setdefault("oidc", {})
         for key, cap in (("issuer", 300), ("client_id", 200), ("public_url", 300),
                          ("button_label", 40)):
@@ -2637,8 +2675,24 @@ def admin_put_sso():
         for key in ("match_email", "require_verified_email", "allow_signup"):
             if key in payload:
                 stored[key] = bool(payload.get(key))
+        warning = ""
+        if "disable_password_login" in payload:
+            disable = bool(payload.get("disable_password_login"))
+            if disable and not stored.get("disable_password_login"):
+                # Guard rails: only with working SSO config, and never in a
+                # way that locks out the admin flipping the switch. The rest
+                # of the form still saves — only this switch stays put.
+                if not oidc_settings(db)["enabled"]:
+                    warning = ("password log-in stays on: set up single sign-on first "
+                               "(issuer, client ID and secret)")
+                elif not admin.get("oidc_sub"):
+                    warning = ("password log-in stays on: link your own account to single "
+                               "sign-on first (🔑 → Single sign-on → Link) — otherwise you'd "
+                               "lock yourself out")
+            if not warning:
+                stored["disable_password_login"] = disable
         save_db(db)
-        return jsonify(oidc_settings_view(db))
+        return jsonify({**oidc_settings_view(db), "warning": warning})
 
 
 @app.post("/api/admin/sso/test")
@@ -2697,45 +2751,156 @@ def admin_delete_user(user_id):
         return jsonify(admin_user_list(db))
 
 
+# ── Backup & restore ─────────────────────────────────────────────────
+# A backup is one JSON file holding *everything* a server needs to come
+# back exactly as it was: the database (accounts, wheels, history,
+# sessions, settings — SSO config included) plus the files that live next
+# to it. Today that's the VAPID private key: without it, every push
+# subscription in the database is dead weight after a move to a new box.
+# Restoring works from the admin panel, or — on a brand-new server with
+# no accounts yet — straight from the first screen, so a blank container
+# can be brought back in one step.
+#
+# Older backups (a bare db.json) are still accepted; they just don't
+# carry the key, so the server keeps whichever one it has.
+BACKUP_FORMAT = "wheel-of-choice-backup"
+BACKUP_FORMAT_VERSION = 1
+BACKUP_FILES = {"vapid-private-key.pem": VAPID_KEY_FILE}
+MAX_BACKUP_FILE_CHARS = 20_000  # a PEM key is ~250 chars; anything near this is bogus
+
+
+def build_backup(db):
+    if webpush is not None:
+        vapid_public_key()  # make sure the key exists, so it's in the backup
+    files = {}
+    for name, path in BACKUP_FILES.items():
+        if path.exists():
+            files[name] = path.read_text(encoding="utf-8")
+    return {
+        "format": BACKUP_FORMAT,
+        "format_version": BACKUP_FORMAT_VERSION,
+        "created": datetime.now(timezone.utc).isoformat(),
+        "app_version": APP_VERSION,
+        "db": db,
+        "files": files,
+    }
+
+
+def _looks_like_private_key(text):
+    if webpush is not None:
+        try:
+            from cryptography.hazmat.primitives import serialization
+            serialization.load_pem_private_key(text.encode("utf-8"), password=None)
+            return True
+        except Exception:
+            return False
+    return "-----BEGIN" in text and "PRIVATE KEY-----" in text
+
+
+def parse_backup(payload):
+    """(db, files) from an uploaded backup — the full format or a bare
+    db.json from before it. Aborts 400 on anything that isn't one."""
+    files = {}
+    if isinstance(payload, dict) and payload.get("format") == BACKUP_FORMAT:
+        if int(payload.get("format_version") or 0) > BACKUP_FORMAT_VERSION:
+            abort(400, description="that backup comes from a newer version of Wheel of Choice — "
+                                   "update this server first")
+        raw_files = payload.get("files") or {}
+        if not isinstance(raw_files, dict):
+            abort(400, description="that backup's files section is damaged")
+        for name, text in raw_files.items():
+            if name not in BACKUP_FILES:
+                continue  # unknown extras are ignored, never written
+            if not isinstance(text, str) or len(text) > MAX_BACKUP_FILE_CHARS \
+                    or not _looks_like_private_key(text):
+                abort(400, description=f"the {name} in that backup is damaged")
+            files[name] = text
+        payload = payload.get("db")
+    if not isinstance(payload, dict) or not all(
+        isinstance(payload.get(key), dict) for key in ("users", "sessions")
+    ) or not any(isinstance(payload.get(key), dict) for key in ("wheels", "spaces")):
+        abort(400, description="that doesn't look like a Wheel of Choice backup")
+    payload.setdefault("version", 2 if "spaces" in payload else 3)
+    return payload, files
+
+
+def apply_restore(db, files):
+    """Write a parsed backup to disk and drop every in-memory cache that
+    was derived from the old data. Call with _lock held."""
+    global _vapid_public_key
+    DATA_DIR.mkdir(parents=True, exist_ok=True)
+    for name, text in files.items():
+        path = BACKUP_FILES[name]
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(text, encoding="utf-8")
+        tmp.chmod(0o600)
+        tmp.replace(path)
+    if "vapid-private-key.pem" in files:
+        with _vapid_lock:
+            _vapid_public_key = None  # re-derived from the restored key on next use
+    save_db(db)
+    with _login_lock:
+        _login_fails.clear()
+    with _oidc_lock:
+        _oidc_discovery.clear()
+        _oidc_pending.clear()
+        _oidc_handoffs.clear()
+    with _cal_lock:
+        _cal_cache.clear()
+
+
 @app.get("/api/admin/backup")
 def admin_backup():
-    """The whole database as a downloadable file — cheap insurance for a
-    self-hosted app whose world lives in one db.json."""
+    """Everything — database and the VAPID key — as one downloadable file.
+    It holds password hashes, live session tokens, the SSO client secret
+    and the push signing key: keep it as safe as the server itself."""
     with _lock:
         db = load_db()
         require_admin(db)
-        payload = json.dumps(db, ensure_ascii=False, indent=2)
+        payload = json.dumps(build_backup(db), ensure_ascii=False, indent=2)
     stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d")
     response = app.response_class(payload, mimetype="application/json")
     response.headers["Content-Disposition"] = (
         f"attachment; filename=wheel-of-choice-backup-{stamp}.json"
     )
+    response.headers["Cache-Control"] = "no-store"
     return response
 
 
 @app.post("/api/admin/restore")
 def admin_restore():
-    """Replace the database with an uploaded backup. Backups from the
+    """Replace everything with an uploaded backup. Backups from the
     spaces era (v2) are accepted too — they're migrated on the next
     load. The current admin's login is carried over when their account
     exists in the backup; otherwise everyone (including them) has to
     log in again."""
-    payload = request.get_json(force=True, silent=True)
-    if not isinstance(payload, dict) or not all(
-        isinstance(payload.get(key), dict) for key in ("users", "sessions")
-    ) or not any(isinstance(payload.get(key), dict) for key in ("wheels", "spaces")):
-        abort(400, description="that doesn't look like a Wheel of Choice backup")
+    db_new, files = parse_backup(request.get_json(force=True, silent=True))
     header = request.headers.get("Authorization", "")
     token = header[7:] if header.startswith("Bearer ") else ""
     with _lock:
         db = load_db()
         admin = require_admin(db)
-        payload.setdefault("version", 2 if "spaces" in payload else 3)
-        relogin = admin["id"] not in payload["users"]
+        relogin = admin["id"] not in db_new["users"]
         if not relogin:
-            payload["sessions"][token] = db["sessions"][token]
-        save_db(payload)
-    return jsonify({"restored": True, "relogin": relogin})
+            db_new["sessions"][token] = db["sessions"][token]
+        apply_restore(db_new, files)
+    return jsonify({"restored": True, "relogin": relogin, "files": sorted(files)})
+
+
+@app.post("/api/setup/restore")
+def setup_restore():
+    """Bring a brand-new server back from a backup, before anyone has an
+    account — so moving to a fresh container is one upload, not "register
+    a throwaway admin, then restore". Only while the server has no
+    accounts at all: the same window in which the first visitor could
+    register and become admin anyway, so it opens no new door."""
+    db_new, files = parse_backup(request.get_json(force=True, silent=True))
+    with _lock:
+        if load_db()["users"]:
+            abort(403, description="this server already has accounts — "
+                                   "log in as an admin and restore from the admin panel")
+        apply_restore(db_new, files)
+    return jsonify({"restored": True, "files": sorted(files)})
 
 
 @app.post("/api/admin/update")
@@ -2803,9 +2968,16 @@ def public_config():
     reports open until that bootstrap account exists."""
     with _lock:
         db = load_db()
-        open_reg = settings_view(db)["registration_open"] or not db["users"]
+        fresh = not db["users"]
+        open_reg = settings_view(db)["registration_open"] or fresh
         sso = sso_public(db)
-    return jsonify({"registration_open": bool(open_reg), "sso": sso})
+    return jsonify({
+        "registration_open": bool(open_reg),
+        "sso": sso,
+        "password_login": sso["password_login"] or fresh,
+        # a brand-new server offers "restore from a backup" on its first screen
+        "fresh": fresh,
+    })
 
 
 # ── Validation ───────────────────────────────────────────────────────

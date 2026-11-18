@@ -63,6 +63,14 @@
         <p class="sso-divider"><span>or</span></p>
         <button type="button" class="btn btn-ghost sso-btn" id="sso-btn">🔐 Log in with SSO</button>
       </div>
+      <div class="setup-restore" id="setup-restore" hidden>
+        <p class="gate-hint">🆕 This server is brand new. Moving an existing Wheel of Choice
+          here? Restore its backup now — accounts, wheels, settings and the push key all come
+          back, and you log in as before. Or create the first account below to start fresh.</p>
+        <button type="button" class="btn btn-ghost" id="setup-restore-btn">📤 Restore from backup…</button>
+        <input type="file" id="setup-restore-file" accept=".json,application/json" hidden>
+        <p class="update-status" id="setup-restore-status" role="status"></p>
+      </div>
       <p class="gate-hint" id="auth-hint">
         New here? Creating an account takes ten seconds — a name, a password and (if you like) your e-mail address.
         Your wheels, favourites and preferences are saved to it, and every wheel can be
@@ -610,6 +618,11 @@
         <span class="admin-setting-field"><input type="checkbox" id="sso-allow-signup"></span>
         <span class="admin-setting-hint">Let people without an account here get one by signing on — even when registration is invite-only.</span>
       </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🚫 Password log-in off</span>
+        <span class="admin-setting-field"><input type="checkbox" id="sso-disable-passwords"></span>
+        <span class="admin-setting-hint" id="sso-disable-passwords-hint">Only the sign-on button logs people in; names, e-mails and passwords stop working (people already logged in stay logged in). Needs your own account linked first. If the provider ever breaks, start the server with <code>WHEEL_FORCE_PASSWORD_LOGIN=1</code> to get passwords back.</span>
+      </label>
       <p class="manage-hint">Redirect URI for the provider: <code id="sso-redirect-uri">—</code></p>
       <div class="form-actions">
         <button type="button" class="btn btn-primary btn-small" id="sso-save-btn">Save sign-on settings</button>
@@ -670,9 +683,11 @@
       <p class="update-status" id="maps-key-status" role="status"></p>
     </div>
     <h3>Backup</h3>
-    <p class="manage-hint">Everything — accounts, wheels, history — lives in one
-      <code>db.json</code> on the server. Download a copy now and then; restoring
-      one <strong>replaces all current data</strong>.</p>
+    <p class="manage-hint">One file with <strong>everything</strong>: accounts, wheels,
+      history, settings (sign-on included) and the push-notification key. Restoring it —
+      here, or on the first screen of a brand-new server — brings the whole app back and
+      <strong>replaces all current data</strong>. It contains password hashes and secrets:
+      keep it somewhere safe.</p>
     <div class="form-actions">
       <button type="button" class="btn btn-ghost" id="admin-backup-btn">💾 Download backup</button>
       <button type="button" class="btn btn-ghost" id="admin-restore-btn">📤 Restore from backup…</button>

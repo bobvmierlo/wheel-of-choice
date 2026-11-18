@@ -588,6 +588,27 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     if (sso && sso.enabled) ssoBtn.textContent = `🔐 ${sso.label}`;
   }
 
+  // Shape the logged-out screen after /api/config: the sign-on button,
+  // whether passwords work at all (an admin can switch them off once SSO
+  // is set up — then the sign-on button is the only way in), and on a
+  // brand-new server the "restore from a backup" offer.
+  const authTabs = document.querySelector('.auth-tabs');
+  const setupRestore = document.getElementById('setup-restore');
+  function applyAuthConfig(config) {
+    showSsoButton(config.sso);
+    const passwords = config.password_login !== false;
+    authTabs.hidden = !passwords;
+    authForm.hidden = !passwords;
+    ssoBlock.classList.toggle('sso-only', !passwords);
+    if (!passwords) {
+      authHint.textContent = inviteCode
+        ? 'Sign on with your account at the identity provider — you\'ll join the shared wheel straight after.'
+        : 'This server uses single sign-on — log in with your account at the identity provider.';
+    }
+    setupRestore.hidden = !config.fresh;
+    return passwords;
+  }
+
   async function finishSso(code) {
     showView('auth');
     authError.textContent = '⏳ Signing you in…';
@@ -1886,13 +1907,20 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       : 'Your account signs in through single sign-on and has no password. Set one to also be able to log in with your name or e-mail.';
     passwordSubmit.textContent = hasPw ? 'Change password' : 'Set password';
     const sso = me.sso || {};
+    const passwordsOn = sso.password_login !== false;
+    // with passwords switched off there's nothing to set or confirm with
+    emailPasswordRow.hidden = !hasPw || !passwordsOn;
+    emailPassword.required = hasPw && passwordsOn;
+    passwordForm.hidden = !passwordsOn;
+    passwordHint.hidden = !passwordsOn;
+    passwordHint.previousElementSibling.hidden = !passwordsOn; // the "Password" heading
     accountSso.hidden = !(sso.enabled || u.sso_linked);
     accountSsoStatus.textContent = u.sso_linked
       ? '🔗 Your account is linked — you can log in with the sign-on button.'
       : 'Not linked yet. Link it to log in with the sign-on button from now on — handy when your e-mail address here differs from the one your identity provider has.';
     accountSsoLink.hidden = u.sso_linked || !sso.enabled;
     accountSsoLink.textContent = `🔗 ${sso.label || 'Link sign-on'}`.replace(/^🔗 Log in with/, '🔗 Link');
-    accountSsoUnlink.hidden = !u.sso_linked;
+    accountSsoUnlink.hidden = !u.sso_linked || !passwordsOn;
     accountSsoUnlink.disabled = !hasPw;
     accountSsoUnlink.title = hasPw ? 'Detach your account from single sign-on' : 'Set a password first, or you couldn\'t log in anymore';
   }
@@ -2122,6 +2150,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const ssoRequireVerified = document.getElementById('sso-require-verified');
   const ssoAllowSignup = document.getElementById('sso-allow-signup');
   const ssoRedirectUri = document.getElementById('sso-redirect-uri');
+  const ssoDisablePasswords = document.getElementById('sso-disable-passwords');
+  const ssoDisablePasswordsHint = document.getElementById('sso-disable-passwords-hint');
+  const SSO_DISABLE_HINT = ssoDisablePasswordsHint.innerHTML;
   const ssoSaveBtn = document.getElementById('sso-save-btn');
   const ssoTestBtn = document.getElementById('sso-test-btn');
   const ssoStatus = document.getElementById('sso-status');
@@ -2140,7 +2171,25 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     ssoRequireVerified.checked = !!v.require_verified_email;
     ssoAllowSignup.checked = !!v.allow_signup;
     ssoRedirectUri.textContent = v.redirect_uri || '—';
-    if (me) me.sso = { enabled: !!v.enabled, label: v.button_label };
+    ssoDisablePasswords.checked = !!v.disable_password_login;
+    ssoDisablePasswordsHint.innerHTML = SSO_DISABLE_HINT;
+    const extra = [];
+    if (v.password_login_forced) {
+      extra.push('⚠️ WHEEL_FORCE_PASSWORD_LOGIN is set on the server, so passwords work anyway right now.');
+    } else if (v.disable_password_login && !v.enabled) {
+      extra.push('⚠️ Sign-on isn\'t fully configured, so passwords stay on until it is.');
+    }
+    if (v.unlinked_users && v.unlinked_users.length) {
+      extra.push(`Not linked to sign-on yet: ${v.unlinked_users.join(', ')}`
+        + (v.disable_password_login ? ' — they can only get in through sign-on now (matched by e-mail).' : '.'));
+    }
+    for (const line of extra) {
+      const span = document.createElement('span');
+      span.className = 'sso-extra';
+      span.textContent = line;
+      ssoDisablePasswordsHint.append(document.createElement('br'), span);
+    }
+    if (me) me.sso = { enabled: !!v.enabled, label: v.button_label, password_login: !!v.password_login };
     return v;
   }
 
@@ -2164,6 +2213,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       match_email: ssoMatchEmail.checked,
       require_verified_email: ssoRequireVerified.checked,
       allow_signup: ssoAllowSignup.checked,
+      disable_password_login: ssoDisablePasswords.checked,
     };
     if (ssoClientSecret.value.trim()) body.client_secret = ssoClientSecret.value.trim();
     try {
@@ -2171,6 +2221,8 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       ssoStatus.textContent = v.enabled
         ? '✅ Saved — the sign-on button is on the login screen.'
         : '✅ Saved — fill in issuer, client ID and secret to switch sign-on on.';
+      if (v.warning) ssoStatus.textContent += ` ⚠️ But ${v.warning}.`;
+      if (me && me.sso) renderAdminUsers(await rootApi('/admin/users')); // reset-password buttons follow the switch
     } catch (err) {
       ssoStatus.textContent = `⚠️ ${err.message}`;
     } finally {
@@ -2310,7 +2362,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   adminRestoreFile.addEventListener('change', async () => {
     const file = adminRestoreFile.files[0];
     if (!file) return;
-    if (!confirm(`Restore "${file.name}"? This replaces ALL current data — accounts, wheels and history — with the backup's contents.`)) return;
+    if (!confirm(`Restore "${file.name}"? This replaces ALL current data — accounts, wheels, history and settings — with the backup's contents.`)) return;
     backupStatus.textContent = '⏳ Restoring…';
     try {
       const text = await file.text();
@@ -2321,7 +2373,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         forceLogout();
         return;
       }
-      backupStatus.textContent = '✅ Backup restored.';
+      backupStatus.textContent = res.files.includes('vapid-private-key.pem')
+        ? '✅ Backup restored, push key included.'
+        : '✅ Backup restored. (Older backup without a push key — the current one was kept.)';
       me = await rootApi('/me');
       applyMe();
       renderAdminUsers(await rootApi('/admin/users'));
@@ -2393,7 +2447,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
             body: JSON.stringify({ admin: !u.admin }),
           }))
         ));
-        li.append(adminActionBtn('🔑 Reset password',
+        if (!me.sso || me.sso.password_login !== false) li.append(adminActionBtn('🔑 Reset password',
           'Set a temporary password and log them out everywhere', async () => {
             const pw = prompt(`Set a temporary password for ${u.name} (at least 8 characters).\n`
               + `They'll be logged out on every device and come back in with it — `
@@ -3641,11 +3695,45 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         ? `🎟️ You've been invited to Wheel of Choice — create your account below.`
         : `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
       inviteBanner.hidden = false;
-      rootApi('/config').then((c) => showSsoButton(c.sso)).catch(() => {});
+      rootApi('/config').then(applyAuthConfig).catch(() => {});
     } else {
       applyRegistrationGate();
     }
   }
+
+  // Brand-new server: restore a backup before anyone has an account, so
+  // moving to a fresh container is a single upload.
+  const setupRestoreBtn = document.getElementById('setup-restore-btn');
+  const setupRestoreFile = document.getElementById('setup-restore-file');
+  const setupRestoreStatus = document.getElementById('setup-restore-status');
+  setupRestoreBtn.addEventListener('click', () => {
+    setupRestoreFile.value = '';
+    setupRestoreFile.click();
+  });
+  setupRestoreFile.addEventListener('change', async () => {
+    const file = setupRestoreFile.files[0];
+    if (!file) return;
+    setupRestoreStatus.textContent = '⏳ Restoring…';
+    setupRestoreBtn.disabled = true;
+    try {
+      const text = await file.text();
+      JSON.parse(text); // catch garbage before it travels
+      const res = await rootApi('/setup/restore', { method: 'POST', body: text });
+      setupRestoreStatus.textContent = res.files.includes('vapid-private-key.pem')
+        ? '✅ Restored, push key included — log in with your usual account.'
+        : '✅ Restored — log in with your usual account. (This older backup had no push key: phones need to switch notifications on again.)';
+      document.querySelector('.auth-tabs .tab[data-mode="login"]').click();
+      applyRegistrationGate();
+      setupRestore.hidden = false; // keep the success message in view
+      setupRestoreBtn.hidden = true;
+    } catch (err) {
+      setupRestoreStatus.textContent = err instanceof SyntaxError
+        ? '⚠️ That file isn\'t a Wheel of Choice backup.'
+        : `⚠️ ${err.message}`;
+    } finally {
+      setupRestoreBtn.disabled = false;
+    }
+  });
 
   // On the logged-out screen, hide the "Create account" tab when the
   // server has registration closed — signing up is invite-only then, and
@@ -3657,7 +3745,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     try {
       const config = await rootApi('/config');
       open = config.registration_open;
-      showSsoButton(config.sso);
+      if (!applyAuthConfig(config)) return; // passwords off: no tabs to juggle
     } catch { return; }
     const registerTab = document.querySelector('.auth-tabs .tab[data-mode="register"]');
     if (registerTab) registerTab.hidden = !open;
