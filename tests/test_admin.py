@@ -1,5 +1,6 @@
 """Admin: bootstrap, promotion, deletion, and the guardrails around them."""
 from conftest import register, make_restaurant_wheel
+from wheelapp import storage
 
 
 def test_first_account_is_admin_others_are_not(client):
@@ -39,10 +40,9 @@ def test_admin_can_delete_another_user(client):
 
 
 def test_deleting_a_user_drops_their_solo_wheels(client):
-    import server
     admin = register(client, "Alice")
     bob = register(client, "Bob")
     wid, _ = make_restaurant_wheel(bob)
     admin.delete(f"/api/admin/users/{bob.user_id}")
-    db = server.load_db()
+    db = storage.load_db()
     assert wid not in db["wheels"]

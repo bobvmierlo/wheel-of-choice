@@ -6,8 +6,8 @@ from urllib.parse import parse_qs, urlparse
 
 import pytest
 
-import server
 from conftest import register, login
+from wheelapp import oidc
 
 ISSUER = "https://auth.example.com/application/o/wheel/"
 
@@ -46,10 +46,10 @@ class FakeIdP:
 @pytest.fixture
 def idp(monkeypatch):
     fake = FakeIdP()
-    monkeypatch.setattr(server, "_oidc_http", fake)
-    server._oidc_discovery.clear()
-    server._oidc_pending.clear()
-    server._oidc_handoffs.clear()
+    monkeypatch.setattr(oidc, "_oidc_http", fake)
+    oidc._oidc_discovery.clear()
+    oidc._oidc_pending.clear()
+    oidc._oidc_handoffs.clear()
     return fake
 
 

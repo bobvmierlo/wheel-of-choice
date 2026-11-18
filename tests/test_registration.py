@@ -1,6 +1,6 @@
 """Admin-controlled registration gate and account invites."""
-import server
 from conftest import register, make_restaurant_wheel
+from wheelapp import storage
 
 
 def close_registration(admin):
@@ -46,7 +46,7 @@ def test_closed_registration_blocks_open_signup(client):
 
 def test_first_account_always_allowed_even_if_closed(client):
     # a fresh server with the flag pre-set to closed must still bootstrap
-    server.save_db({"version": 3, "users": {}, "sessions": {}, "wheels": {},
+    storage.save_db({"version": 3, "users": {}, "sessions": {}, "wheels": {},
                     "settings": {"registration_open": False}})
     resp = client.post("/api/auth/register", json={"name": "Alice", "password": "secret12"})
     assert resp.status_code == 201

@@ -5,7 +5,6 @@ never touched. server.py reads its DB path from WHEEL_DATA_DIR at import
 time, so we set that *before* importing the module, then wipe the db file
 (and the in-memory caches) between tests for a clean slate each time.
 """
-import importlib
 import json
 import os
 import sys
@@ -24,19 +23,20 @@ os.environ.pop("VAPID_SUBJECT", None)
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 import server  # noqa: E402
+from wheelapp import accounts, calendars, core, updates
 
 
 @pytest.fixture
 def app():
     """A fresh, empty database for each test."""
-    if server.DB_FILE.exists():
-        server.DB_FILE.unlink()
+    if core.DB_FILE.exists():
+        core.DB_FILE.unlink()
     # Reset in-memory caches that outlive a single db.json.
-    server._cal_cache.clear()
-    with server._login_lock:
-        server._login_fails.clear()
-    with server._update_check_lock:
-        server._update_check_cache.update({"at": 0.0, "data": None})
+    calendars._cal_cache.clear()
+    with accounts._login_lock:
+        accounts._login_fails.clear()
+    with updates._update_check_lock:
+        updates._update_check_cache.update({"at": 0.0, "data": None})
     yield server.app
 
 
@@ -116,5 +116,5 @@ def add_entry(session, wheel_id, name="Test place", travel=False):
 
 def write_db(raw):
     """Drop a raw db dict straight onto disk — for migration tests."""
-    server.DATA_DIR.mkdir(parents=True, exist_ok=True)
-    server.DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
+    core.DATA_DIR.mkdir(parents=True, exist_ok=True)
+    core.DB_FILE.write_text(json.dumps(raw), encoding="utf-8")
