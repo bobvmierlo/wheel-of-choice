@@ -510,7 +510,7 @@
     </div>
     <h3>Password</h3>
     <p class="manage-hint" id="password-hint">Pick a new password for your account. You'll stay logged in
-      on this device; other devices keep their session too.</p>
+      on this device; other devices are logged out.</p>
     <form id="password-form" class="auth-form">
       <label id="password-current-row">Current password
         <input type="password" id="password-current" autocomplete="current-password" required
@@ -528,6 +528,14 @@
       <p class="push-state" id="password-state" role="status"></p>
       <p class="form-error" id="password-error" role="alert"></p>
     </form>
+    <h3>Logged-in devices</h3>
+    <p class="manage-hint">Everywhere you're logged in right now. Don't recognise one, or lost a
+      phone? Log it out.</p>
+    <ul id="session-list" class="dest-list session-list"></ul>
+    <div class="form-actions">
+      <button type="button" class="btn btn-ghost" id="end-others-btn">Log out all other devices</button>
+    </div>
+    <p class="form-error" id="session-error" role="alert"></p>
   </dialog>
 
   <!-- ── Admin modal ────────────────────────────────────────────────── -->

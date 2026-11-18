@@ -194,7 +194,7 @@ def admin_reset_password(user_id):
             abort(404, description="no such user")
         accounts.set_password(target, new_password)
         # force the target to log back in everywhere with the new password
-        db["sessions"] = {t: s for t, s in db["sessions"].items() if s["user"] != user_id}
+        accounts.end_sessions(db, user_id)
         accounts.clear_login_fails(target["id"])  # don't punish them for the lock-out
         storage.save_db(db)
     return jsonify({"reset": True})
@@ -337,7 +337,7 @@ def admin_delete_user(user_id):
         target = db["users"].pop(user_id, None)
         if target is None:
             abort(404, description="no such user")
-        db["sessions"] = {t: s for t, s in db["sessions"].items() if s["user"] != user_id}
+        accounts.end_sessions(db, user_id)
         for wid in target.get("wheels", []):
             accounts.drop_wheel_if_empty(db, wid)
         storage.save_db(db)

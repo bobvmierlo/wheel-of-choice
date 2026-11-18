@@ -34,6 +34,8 @@ def app():
     calendars._cal_cache.clear()
     with accounts._login_lock:
         accounts._login_fails.clear()
+    with accounts._rate_lock:
+        accounts._rate_hits.clear()
     with updates._update_check_lock:
         updates._update_check_cache.update({"at": 0.0, "data": None})
     yield server.app

@@ -1932,11 +1932,62 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     accountSsoState.textContent = ssoMessage;
     accountSsoError.textContent = ssoErr ? `⚠️ ${ssoErr}` : '';
     renderAccount();
+    loadSessions();
     passwordModal.showModal();
     if (!ssoMessage && !ssoErr) accountEmail.focus();
   }
 
   passwordBtn.addEventListener('click', () => openAccount());
+
+  // ── Logged-in devices ─────────────────────────────────────────────
+  const sessionList = document.getElementById('session-list');
+  const endOthersBtn = document.getElementById('end-others-btn');
+  const sessionError = document.getElementById('session-error');
+
+  function renderSessions(sessions) {
+    sessionList.innerHTML = '';
+    for (const s of sessions) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'dest-name';
+      name.textContent = `${s.current ? '📍' : '💻'} ${s.device}${s.current ? ' (this device)' : ''}`;
+      const meta = document.createElement('span');
+      meta.className = 'dest-meta';
+      meta.textContent = `last active ${formatDateTime(s.last_seen)} · since ${formatDateTime(s.created)}`;
+      li.append(name, meta);
+      if (!s.current) {
+        li.append(adminActionBtn('Log out', 'Log this device out', async () => {
+          sessionError.textContent = '';
+          try {
+            renderSessions(await rootApi(`/me/sessions/${encodeURIComponent(s.id)}`, { method: 'DELETE' }));
+          } catch (err) {
+            sessionError.textContent = `⚠️ ${err.message}`;
+          }
+        }));
+      }
+      sessionList.append(li);
+    }
+    endOthersBtn.hidden = sessions.length < 2;
+  }
+
+  async function loadSessions() {
+    sessionError.textContent = '';
+    try {
+      renderSessions(await rootApi('/me/sessions'));
+    } catch (err) {
+      sessionError.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  endOthersBtn.addEventListener('click', async () => {
+    if (!confirm('Log out every other device? They\'ll need to log in again.')) return;
+    sessionError.textContent = '';
+    try {
+      renderSessions(await rootApi('/me/sessions/end-others', { method: 'POST' }));
+    } catch (err) {
+      sessionError.textContent = `⚠️ ${err.message}`;
+    }
+  });
 
   emailForm.addEventListener('submit', async (e) => {
     e.preventDefault();
@@ -2000,6 +2051,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       passwordState.textContent = me.user.has_password ? '✅ Password changed' : '✅ Password set';
       me.user.has_password = true;
       renderAccount();
+      loadSessions(); // the other devices were just logged out
       setTimeout(() => { if (passwordModal.open) passwordModal.close(); }, 1200);
     } catch (err) {
       passwordError.textContent = `⚠️ ${err.message}`;

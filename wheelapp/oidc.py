@@ -296,6 +296,7 @@ def oidc_start():
     linking the logged-in account). Returns the provider URL for the
     browser to go to; a JSON call rather than a plain link so that linking
     can carry the session token."""
+    accounts.rate_limit("sso-start")
     payload = request.get_json(force=True, silent=True) or {}
     mode = "link" if payload.get("mode") == "link" else "login"
     code = str(payload.get("code", "")).strip().upper().replace(" ", "")[:20]
@@ -445,7 +446,7 @@ def oidc_finish():
         abort(400, description="that sign-in expired — try again")
     with _lock:
         db = storage.load_db()
-        session = db["sessions"].get(handoff["token"])
+        session = db["sessions"].get(accounts.token_key(handoff["token"]))
         user = db["users"].get(session["user"]) if session else None
         if user is None:
             abort(400, description="that sign-in expired — try again")

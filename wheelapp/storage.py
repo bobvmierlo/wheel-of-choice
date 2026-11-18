@@ -14,7 +14,7 @@ from .core import (
     WHEEL_TYPES,
     apply_runtime_settings,
 )
-from . import seeding
+from . import accounts, seeding
 
 
 # ── Storage ──────────────────────────────────────────────────────────
@@ -234,6 +234,8 @@ def load_db():
         save_db(db)
     for coll in ("users", "sessions", "wheels"):
         db.setdefault(coll, {})  # an emptied collection has no rows left
+    if accounts.hash_legacy_sessions(db):  # sessions from before tokens were hashed
+        save_db(db)
     if not db.get("home_roam_backfilled"):
         seeding.backfill_home_roam(db)  # stamp home/roam onto pre-existing wheels
         save_db(db)

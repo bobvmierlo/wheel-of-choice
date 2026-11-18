@@ -138,14 +138,13 @@ def admin_restore():
     exists in the backup; otherwise everyone (including them) has to
     log in again."""
     db_new, files = parse_backup(request.get_json(force=True, silent=True))
-    header = request.headers.get("Authorization", "")
-    token = header[7:] if header.startswith("Bearer ") else ""
+    key = accounts.request_session_key()
     with _lock:
         db = storage.load_db()
         admin = admin_api.require_admin(db)
         relogin = admin["id"] not in db_new["users"]
         if not relogin:
-            db_new["sessions"][token] = db["sessions"][token]
+            db_new["sessions"][key] = db["sessions"][key]
         apply_restore(db_new, files)
     return jsonify({"restored": True, "relogin": relogin, "files": sorted(files)})
 
@@ -157,6 +156,7 @@ def setup_restore():
     a throwaway admin, then restore". Only while the server has no
     accounts at all: the same window in which the first visitor could
     register and become admin anyway, so it opens no new door."""
+    accounts.rate_limit("setup-restore")
     db_new, files = parse_backup(request.get_json(force=True, silent=True))
     with _lock:
         if storage.load_db()["users"]:

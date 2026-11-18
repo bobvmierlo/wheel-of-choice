@@ -185,16 +185,152 @@ def session_cutoff():
     return (datetime.now(timezone.utc) - timedelta(days=SESSION_TTL_DAYS)).isoformat()
 
 
-def current_user(db):
+# ── Sessions ─────────────────────────────────────────────────────────
+# A login hands the browser a random bearer token. The server only ever
+# stores its SHA-256 — so the database (and every backup of it) can't be
+# used to log in as anyone. Each session also remembers roughly which
+# device it is and when it was last used, so people can see their logins
+# and end the ones they don't recognise.
+SESSION_TOUCH_EVERY = 3600  # seconds between "last seen" updates (each one is a write)
+
+
+def token_key(token):
+    """What a session is stored under: the token's SHA-256, hex."""
+    return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+def is_token_key(key):
+    return len(key) == 64 and all(c in "0123456789abcdef" for c in key)
+
+
+def request_token():
     header = request.headers.get("Authorization", "")
-    token = header[7:] if header.startswith("Bearer ") else ""
-    session = db["sessions"].get(token)
+    return header[7:] if header.startswith("Bearer ") else ""
+
+
+def request_session_key():
+    token = request_token()
+    return token_key(token) if token else ""
+
+
+def hash_legacy_sessions(db):
+    """Sessions from before tokens were hashed are keyed by the raw token:
+    re-key them by its hash. Nobody gets logged out. True if anything
+    changed (so the caller saves)."""
+    raw = [k for k in db.get("sessions", {}) if not is_token_key(k)]
+    for token in raw:
+        db["sessions"][token_key(token)] = db["sessions"].pop(token)
+    return bool(raw)
+
+
+def device_label(user_agent):
+    """'Safari on iPhone'-style label for a session — just enough to tell
+    your own devices apart, nothing more is kept."""
+    ua = user_agent or ""
+    if "iPhone" in ua:
+        os_name = "iPhone"
+    elif "iPad" in ua:
+        os_name = "iPad"
+    elif "Android" in ua:
+        os_name = "Android"
+    elif "Mac OS X" in ua or "Macintosh" in ua:
+        os_name = "Mac"
+    elif "Windows" in ua:
+        os_name = "Windows"
+    elif "Linux" in ua:
+        os_name = "Linux"
+    else:
+        os_name = ""
+    for marker, name in (("Edg/", "Edge"), ("OPR/", "Opera"), ("Firefox/", "Firefox"),
+                         ("FxiOS", "Firefox"), ("CriOS", "Chrome"), ("Chrome/", "Chrome"),
+                         ("Safari/", "Safari")):
+        if marker in ua:
+            browser = name
+            break
+    else:
+        browser = ""
+    if browser and os_name:
+        return f"{browser} on {os_name}"
+    return browser or os_name or "Unknown device"
+
+
+def current_session(db):
+    key = request_session_key()
+    session = db["sessions"].get(key) if key else None
     if session and session.get("created", "") < session_cutoff():
         session = None  # expired — same as not logged in
+    return key, session
+
+
+def current_user(db):
+    key, session = current_session(db)
     user = db["users"].get(session["user"]) if session else None
     if not user:
         abort(401, description="please log in")
+    # keep "last seen" roughly current, without a write on every request
+    now = datetime.now(timezone.utc)
+    try:
+        stale = (now - datetime.fromisoformat(session.get("last_seen") or session["created"])
+                 ).total_seconds() > SESSION_TOUCH_EVERY
+    except (ValueError, TypeError):
+        stale = True
+    if stale:
+        session["last_seen"] = now.isoformat()
+        storage.save_db(db)
     return user
+
+
+def end_sessions(db, user_id, keep=None):
+    """Log a user out everywhere — except the session `keep`, if given."""
+    db["sessions"] = {k: s for k, s in db["sessions"].items()
+                      if s["user"] != user_id or k == keep}
+
+
+def sessions_view(db, user):
+    current = request_session_key()
+    cutoff = session_cutoff()
+    out = [{
+        "id": key[:16],
+        "device": s.get("device") or "Unknown device",
+        "created": s.get("created"),
+        "last_seen": s.get("last_seen") or s.get("created"),
+        "current": key == current,
+    } for key, s in db["sessions"].items()
+        if s["user"] == user["id"] and s.get("created", "") >= cutoff]
+    return sorted(out, key=lambda s: (not s["current"], s["last_seen"] or ""), reverse=False)
+
+
+# ── Rate limits ──────────────────────────────────────────────────────
+# Cheap sliding-window caps on the unauthenticated endpoints that create
+# things (accounts, a restored server, SSO round trips), so a script
+# can't hammer them. Server-wide per action plus per client address:
+# behind a reverse proxy every request shares one address, which simply
+# makes the per-address cap act server-wide too. In memory, like the
+# login throttle.
+_rate_hits = {}
+_rate_lock = threading.Lock()
+RATE_LIMITS = {
+    # action: (max hits, window in seconds) per client address
+    "register": (10, 3600),
+    "setup-restore": (10, 600),
+    "sso-start": (30, 300),
+}
+RATE_GLOBAL_FACTOR = 5  # the whole server may do this many times the per-address cap
+
+
+def rate_limit(action):
+    limit, window = RATE_LIMITS[action]
+    now = time.monotonic()
+    addr = request.remote_addr or "?"
+    with _rate_lock:
+        for key, cap in (((action, addr), limit), ((action, "*"), limit * RATE_GLOBAL_FACTOR)):
+            hits = [t for t in _rate_hits.get(key, []) if now - t < window]
+            _rate_hits[key] = hits
+            if len(hits) >= cap:
+                wait = int(window - (now - hits[0])) + 1
+                abort(429, description=f"too many attempts — try again in about {max(1, wait // 60)} min")
+        for key in ((action, addr), (action, "*")):
+            _rate_hits[key].append(now)
 
 
 def wheel_member_users(db, wheel_id):
@@ -296,9 +432,12 @@ def start_session(db, user):
     cutoff = session_cutoff()
     db["sessions"] = {t: s for t, s in db["sessions"].items() if s.get("created", "") >= cutoff}
     token = secrets.token_urlsafe(32)
-    db["sessions"][token] = {
+    now = datetime.now(timezone.utc).isoformat()
+    db["sessions"][token_key(token)] = {
         "user": user["id"],
-        "created": datetime.now(timezone.utc).isoformat(),
+        "created": now,
+        "last_seen": now,
+        "device": device_label(request.headers.get("User-Agent")),
     }
     return token
 
@@ -322,6 +461,7 @@ def register():
     # the new account starts with that wheel already in its list.
     code = str(payload.get("code", "")).strip().upper().replace(" ", "")
     check_name(name)
+    rate_limit("register")
     if len(password) < MIN_PASSWORD_LEN:
         abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
     with _lock:
@@ -408,13 +548,48 @@ def login():
 
 @app.post("/api/auth/logout")
 def logout():
-    header = request.headers.get("Authorization", "")
-    token = header[7:] if header.startswith("Bearer ") else ""
+    key = request_session_key()
     with _lock:
         db = storage.load_db()
-        if db["sessions"].pop(token, None):
+        if key and db["sessions"].pop(key, None):
             storage.save_db(db)
     return "", 204
+
+
+@app.get("/api/me/sessions")
+def list_sessions():
+    """Where you're logged in: device, when, and which one is this."""
+    with _lock:
+        db = storage.load_db()
+        user = current_user(db)
+        return jsonify(sessions_view(db, user))
+
+
+@app.delete("/api/me/sessions/<session_id>")
+def end_session(session_id):
+    """Log one of your devices out (by the short id from the list)."""
+    with _lock:
+        db = storage.load_db()
+        user = current_user(db)
+        match = [k for k, s in db["sessions"].items()
+                 if s["user"] == user["id"] and k[:16] == session_id]
+        if not match:
+            abort(404, description="no such session (already logged out?)")
+        for key in match:
+            db["sessions"].pop(key)
+        storage.save_db(db)
+        return jsonify(sessions_view(db, user))
+
+
+@app.post("/api/me/sessions/end-others")
+def end_other_sessions():
+    """Log out every device but this one — e.g. after losing a phone."""
+    with _lock:
+        db = storage.load_db()
+        user = current_user(db)
+        end_sessions(db, user["id"], keep=request_session_key())
+        storage.save_db(db)
+        return jsonify(sessions_view(db, user))
 
 
 @app.get("/api/me")
@@ -460,6 +635,8 @@ def change_password():
         if user.get("password") and not password_ok(user, current):
             abort(403, description="that's not your current password")
         set_password(user, new_password)
+        # a new password should shut out whoever might know the old one
+        end_sessions(db, user["id"], keep=request_session_key())
         storage.save_db(db)
     return jsonify({"changed": True})
 
