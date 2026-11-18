@@ -27,6 +27,11 @@ services:
     #   WHEEL_TZ: Europe/Amsterdam
     #   WHEEL_EVENING_FROM: "17"
     #   WHEEL_POLL_HORIZON_DAYS: "60"
+    #   # Single sign-on (Authentik / OpenID Connect) — or set in 🛠️ Admin:
+    #   WHEEL_PUBLIC_URL: https://wheel.example.com
+    #   WHEEL_OIDC_ISSUER: https://auth.example.com/application/o/wheel/
+    #   WHEEL_OIDC_CLIENT_ID: ...
+    #   WHEEL_OIDC_CLIENT_SECRET: ...
 
 volumes:
   wheel-data:

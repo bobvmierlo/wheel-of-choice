@@ -460,6 +460,14 @@ body {
 .admin-setting-suffix { color: var(--text-dim); font-size: 0.9rem; }
 .admin-setting-hint { grid-column: 1 / -1; color: var(--text-dim); font-size: 0.8rem; line-height: 1.4; }
 .admin-setting-field input[type="text"] { width: 13rem; max-width: 100%; }
+.admin-setting-field input[type="password"] { width: 13rem; max-width: 100%; }
+.admin-setting-field input.input-wide { width: 22rem; }
+.admin-setting:has(input.input-wide) { grid-template-columns: auto minmax(0, 1fr); }
+.admin-setting-field:has(input.input-wide) { min-width: 0; }
+/* the account modal stacks three small forms — don't reserve space for
+   status lines that have nothing to say */
+#password-modal .push-state:empty,
+#password-modal .form-error:empty { display: none; }
 .admin-setting-field input[type="checkbox"] {
   width: auto;
   padding: 0;
@@ -536,6 +544,11 @@ body {
 
 .auth-tabs { display: flex; gap: 0.5rem; margin-bottom: 1.2rem; }
 .auth-form { display: flex; flex-direction: column; gap: 0.9rem; }
+.label-optional { color: var(--text-dim); font-weight: normal; font-size: 0.85em; }
+.sso-block { margin-top: 1rem; display: flex; flex-direction: column; gap: 0.6rem; }
+.sso-divider { display: flex; align-items: center; gap: 0.6rem; color: var(--text-dim); font-size: 0.82rem; margin: 0; }
+.sso-divider::before, .sso-divider::after { content: ""; flex: 1; border-top: 1px solid currentColor; opacity: 0.35; }
+.sso-btn { width: 100%; }
 .auth-form label {
   display: flex;
   flex-direction: column;
