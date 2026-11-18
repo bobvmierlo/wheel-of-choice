@@ -123,3 +123,57 @@ def test_newer_backup_format_refused(client):
 
 def test_garbage_refused_on_setup(client):
     assert client.post("/api/setup/restore", json={"hello": 1}).status_code == 400
+
+
+# ── Automatic daily backups ──────────────────────────────────────────
+from wheelapp import backup  # noqa: E402
+
+
+@pytest.fixture
+def backup_dir():
+    import shutil
+    shutil.rmtree(backup.BACKUP_DIR, ignore_errors=True)
+    yield backup.BACKUP_DIR
+    shutil.rmtree(backup.BACKUP_DIR, ignore_errors=True)
+
+
+def test_auto_backup_writes_once_per_day_and_prunes(client, backup_dir):
+    admin = register(client, "Alice")
+    assert backup.run_auto_backup("2026-01-01") is not None
+    assert backup.run_auto_backup("2026-01-01") is None  # already there
+    admin.put("/api/admin/backups", json={"keep": 3})
+    for day in ("2026-01-02", "2026-01-03", "2026-01-04", "2026-01-05"):
+        backup.run_auto_backup(day)
+    names = [b["name"] for b in admin.get("/api/admin/backups").get_json()["backups"]]
+    assert len(names) == 3 and names[0] > names[-1]
+    assert "wheel-of-choice-2026-01-01.json" not in names
+    saved = json.loads((backup_dir / names[0]).read_text())
+    assert saved["format"] == "wheel-of-choice-backup"
+
+
+def test_auto_backup_off_and_empty_server(client, backup_dir):
+    assert backup.run_auto_backup("2026-01-01") is None  # no accounts yet
+    admin = register(client, "Alice")
+    admin.put("/api/admin/backups", json={"keep": 0})
+    assert backup.run_auto_backup("2026-01-02") is None
+
+
+def test_download_and_restore_auto_backup(client, backup_dir):
+    admin = register(client, "Alice")
+    backup.run_auto_backup("2026-01-01")
+    register(client, "Bob")  # made after the backup
+    r = admin.get("/api/admin/backups/wheel-of-choice-2026-01-01.json")
+    assert r.status_code == 200 and json.loads(r.data)["db"]["users"]
+    r = admin.post("/api/admin/backups/wheel-of-choice-2026-01-01.json/restore")
+    assert r.status_code == 200 and r.get_json()["relogin"] is False
+    names = [u["name"] for u in admin.get("/api/admin/users").get_json()]
+    assert names == ["Alice"]
+
+
+def test_auto_backup_names_are_checked(client, backup_dir):
+    admin = register(client, "Alice")
+    assert admin.get("/api/admin/backups/..%2Fwheel-of-choice.sqlite3").status_code == 404
+    assert admin.get("/api/admin/backups/evil.json").status_code == 404
+    bob = register(client, "Bob")
+    backup.run_auto_backup("2026-01-01")
+    assert bob.get("/api/admin/backups").status_code == 403

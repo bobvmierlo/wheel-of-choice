@@ -51,6 +51,8 @@ from wheelapp import app  # importing the package registers every route
 
 
 if __name__ == "__main__":
+    from wheelapp import backup
+    backup.start_backup_worker()  # daily backups into data/backups/
     # HOST/PORT default to the same 0.0.0.0:8000 as before; overriding them
     # via the environment is what lets the container (and reverse proxies)
     # place the app wherever they like without editing this file.

@@ -2088,6 +2088,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     loadVersion(); // another admin may have updated in the meantime
     loadAdminSettings(); // another admin may have retuned the polls
     loadSsoSettings();
+    loadAutoBackups();
     registrationStatus.textContent = '';
     loadInvites(); // list any pending invite links
     startUpdatePolling(); // watch git for a newer commit while the panel's open
@@ -2386,25 +2387,26 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const adminRestoreFile = document.getElementById('admin-restore-file');
   const backupStatus = document.getElementById('backup-status');
 
-  adminBackupBtn.addEventListener('click', async () => {
-    backupStatus.textContent = '';
+  // fetch by hand: a plain download link can't carry the auth header
+  async function downloadBackup(url, filename, statusEl) {
+    statusEl.textContent = '';
     try {
-      // fetch by hand: a plain download link can't carry the auth header
-      const res = await fetch('/api/admin/backup', {
-        headers: { Authorization: `Bearer ${token}` },
-      });
+      const res = await fetch(url, { headers: { Authorization: `Bearer ${token}` } });
       if (!res.ok) throw new Error(`Server said ${res.status}`);
       const blob = await res.blob();
       const a = document.createElement('a');
       a.href = URL.createObjectURL(blob);
-      a.download = `wheel-of-choice-backup-${new Date().toISOString().slice(0, 10)}.json`;
+      a.download = filename;
       a.click();
       URL.revokeObjectURL(a.href);
-      backupStatus.textContent = '✅ Backup downloaded — tuck it away somewhere safe.';
+      statusEl.textContent = '✅ Backup downloaded — tuck it away somewhere safe.';
     } catch (err) {
-      backupStatus.textContent = `⚠️ ${err.message}`;
+      statusEl.textContent = `⚠️ ${err.message}`;
     }
-  });
+  }
+
+  adminBackupBtn.addEventListener('click', () => downloadBackup('/api/admin/backup',
+    `wheel-of-choice-backup-${new Date().toISOString().slice(0, 10)}.json`, backupStatus));
 
   adminRestoreBtn.addEventListener('click', () => {
     adminRestoreFile.value = '';
@@ -2433,6 +2435,78 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       renderAdminUsers(await rootApi('/admin/users'));
     } catch (err) {
       backupStatus.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  // ── Automatic daily backups ───────────────────────────────────────
+  const autoBackupKeep = document.getElementById('auto-backup-keep');
+  const autoBackupSaveBtn = document.getElementById('auto-backup-save-btn');
+  const autoBackupList = document.getElementById('auto-backup-list');
+  const autoBackupStatus = document.getElementById('auto-backup-status');
+
+  function renderAutoBackups(v) {
+    autoBackupKeep.value = v.keep;
+    autoBackupKeep.max = v.max_keep;
+    autoBackupList.innerHTML = '';
+    if (!v.backups.length) {
+      const li = document.createElement('li');
+      li.className = 'dest-meta';
+      li.textContent = v.keep ? 'No automatic backups yet — the first one is made within the hour.'
+        : 'Automatic backups are off.';
+      autoBackupList.append(li);
+      return;
+    }
+    for (const b of v.backups) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.className = 'dest-name';
+      name.textContent = `🗄️ ${prettyDate(b.date)}`;
+      const meta = document.createElement('span');
+      meta.className = 'dest-meta';
+      meta.textContent = `${Math.max(1, Math.round(b.size / 1024))} KB`;
+      li.append(name, meta);
+      li.append(adminActionBtn('💾 Download', 'Download this backup', () => downloadBackup(
+        `/api/admin/backups/${encodeURIComponent(b.name)}`, b.name, autoBackupStatus)));
+      li.append(adminActionBtn('↩️ Restore', 'Roll the whole server back to this backup', async () => {
+        if (!confirm(`Roll the whole server back to ${prettyDate(b.date)}? Everything since then — accounts, wheels, history, settings — is replaced.`)) return;
+        autoBackupStatus.textContent = '⏳ Restoring…';
+        try {
+          const res = await rootApi(`/admin/backups/${encodeURIComponent(b.name)}/restore`, { method: 'POST' });
+          if (res.relogin) {
+            alert('Backup restored. Your account isn\'t in this backup, so please log in again.');
+            forceLogout();
+            return;
+          }
+          autoBackupStatus.textContent = '✅ Restored.';
+          me = await rootApi('/me');
+          applyMe();
+          renderAdminUsers(await rootApi('/admin/users'));
+        } catch (err) {
+          autoBackupStatus.textContent = `⚠️ ${err.message}`;
+        }
+      }));
+      autoBackupList.append(li);
+    }
+  }
+
+  async function loadAutoBackups() {
+    autoBackupStatus.textContent = '';
+    try {
+      renderAutoBackups(await rootApi('/admin/backups'));
+    } catch (err) {
+      autoBackupStatus.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  autoBackupSaveBtn.addEventListener('click', async () => {
+    autoBackupStatus.textContent = '⏳ Saving…';
+    try {
+      renderAutoBackups(await rootApi('/admin/backups', {
+        method: 'PUT', body: JSON.stringify({ keep: Number(autoBackupKeep.value) }),
+      }));
+      autoBackupStatus.textContent = '✅ Saved.';
+    } catch (err) {
+      autoBackupStatus.textContent = `⚠️ ${err.message}`;
     }
   });
 

@@ -702,6 +702,25 @@
       <input type="file" id="admin-restore-file" accept=".json,application/json" hidden>
     </div>
     <p class="update-status" id="backup-status" role="status"></p>
+    <h4>Automatic backups</h4>
+    <p class="manage-hint">Every day the server also saves a backup in its data folder
+      (<code>backups/</code>), keeping the newest few. Handy to undo a mistake; they live on the
+      same disk, so still download one now and then.</p>
+    <div class="admin-settings">
+      <label class="admin-setting">
+        <span class="admin-setting-label">🗓️ Keep</span>
+        <span class="admin-setting-field">
+          <input type="number" id="auto-backup-keep" min="0" max="90" step="1" inputmode="numeric">
+          <span class="admin-setting-suffix">daily backups</span>
+        </span>
+        <span class="admin-setting-hint">0 switches automatic backups off.</span>
+      </label>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary btn-small" id="auto-backup-save-btn">Save</button>
+      </div>
+    </div>
+    <ul id="auto-backup-list" class="dest-list"></ul>
+    <p class="update-status" id="auto-backup-status" role="status"></p>
     <h3>Server</h3>
     <p class="manage-hint" id="admin-version"></p>
     <p class="update-available" id="admin-update-available" hidden></p>
