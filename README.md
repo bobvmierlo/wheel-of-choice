@@ -127,6 +127,12 @@ full-size.
   Web Push straight from your own server (no Firebase, no accounts with
   anyone); works on Android and, as a Home-Screen app, on iOS 16.4+.
   Setup in [Push notifications](#-push-notifications-optional).
+- **Your language** 🌐 — English and Dutch out of the box, picked from
+  your browser (or the menu top-left). Every other language is one
+  translation file away — see [Translations](#-translations).
+- **Logged-in devices** 📍 — see where you're logged in, log a device
+  out, or all others at once; changing your password logs the other
+  devices out.
 - **Installable** 📲 — the app is a PWA: add it to your phone's home
   screen and it opens full-screen with its own icon, like an app-store
   app — without the app store.
@@ -141,11 +147,16 @@ full-size.
   links**, one per person, from the admin panel. (Wheel invite links keep
   working regardless: sharing a wheel always lets the newcomer sign up.)
 
-**Storage**: everything lives on the server in `data/db.json` — accounts
-(passwords stored as scrypt hashes), login sessions (expiring after 90
-days), push subscriptions, and every wheel. Only your login token stays in the browser. Next
-to it sits `vapid-private-key.pem`, the key that signs push notifications.
-See [Backup & restore](#-backup--restore) for moving all of it in one go.
+**Storage**: everything lives on the server in one SQLite database,
+`data/wheel-of-choice.sqlite3` — accounts (passwords stored as scrypt
+hashes), login sessions (only a hash of each token is stored; they
+expire after 90 days), push subscriptions, and every wheel. Only your
+login token stays in the browser. Next to it sits
+`vapid-private-key.pem`, the key that signs push notifications, and
+`backups/` with the [daily automatic backups](#-backup--restore). See
+[Backup & restore](#-backup--restore) for moving all of it in one go.
+Older versions kept everything in `data/db.json`: it's imported into
+SQLite on the first start and kept as `db.json.imported`.
 Older databases are migrated automatically: the shared *spaces* of v2
 are split into independent wheels (the old space code keeps working — it
 now joins the holidays wheel, and the city-trips wheel gets a fresh code
@@ -155,22 +166,32 @@ first account can adopt from the first-wheel screen.
 ## Running locally
 
 ```bash
-pip install -r requirements.txt   # or: apt install python3-flask
+pip install -r requirements.txt   # or: apt install python3-flask python3-waitress
 python3 server.py
 # then open http://localhost:8000
 ```
 
+`server.py` serves the app with [waitress](https://docs.pylonsproject.org/projects/waitress/),
+a production-grade Python web server; without it installed (or with
+`WHEEL_DEV_SERVER=1`) it falls back to Flask's development server.
+
 ### Tests
 
 The API has a [`pytest`](https://pytest.org) suite covering accounts,
-wheel creation and sharing, the round/veto/confirm handshake, database
-migration and the admin guardrails. Each test runs against a throwaway
-data directory, so it never touches your real `db.json`:
+sessions, single sign-on, wheel creation and sharing, the
+round/veto/confirm handshake, storage and migration, backups,
+translations and the admin guardrails. Each test runs against a
+throwaway data directory, so it never touches your real data:
 
 ```bash
 pip install pytest
 python3 -m pytest
 ```
+
+The suite also runs on GitHub Actions when a pull request is opened
+([`.github/workflows/tests.yml`](.github/workflows/tests.yml)) — only
+then, not on later pushes or merges; re-run it from the PR's checks or
+the Actions tab when needed.
 
 ## 🐳 Running with Docker
 
@@ -232,8 +253,8 @@ secrets under **Settings → Secrets and variables → Actions**:
 
 ## Deploying to a Linux server
 
-The repo ships with a tiny [Flask](https://flask.palletsprojects.com)
-server ([`server.py`](server.py)) and a ready-made systemd unit
+The repo ships with a small [Flask](https://flask.palletsprojects.com)
+server ([`server.py`](server.py), code in [`wheelapp/`](wheelapp)) and a ready-made systemd unit
 ([`deploy/wheel-of-choice.service`](deploy/wheel-of-choice.service)), so
 deploying to any Linux box — an Ubuntu LXC, VM, Raspberry Pi, … — takes
 three steps:
@@ -241,7 +262,7 @@ three steps:
 ### 1. Get the code and Flask
 
 ```bash
-sudo apt update && sudo apt install -y git python3-flask
+sudo apt update && sudo apt install -y git python3-flask python3-waitress
 sudo git clone https://github.com/bobvmierlo/wheel-of-choice.git /opt/wheel-of-choice
 ```
 
@@ -295,7 +316,7 @@ environment — add `Environment=PORT=9000` to the unit file, or pass
 `-e PORT=9000` to Docker — then restart. No code edit required.
 
 The service stores accounts, wheels and history in
-`/var/lib/wheel-of-choice/db.json` (via systemd's `StateDirectory`), so
+`/var/lib/wheel-of-choice/` (via systemd's `StateDirectory`), so
 your data survives updates and restarts. Accounts keep casual visitors
 out, but the app still speaks plain HTTP — run it on your home network
 (or behind a reverse proxy with TLS), not naked on the open internet.
@@ -315,7 +336,7 @@ keys**, which means:
   for** — the messages do pass through the platform relay (that's how
   phones get woken), but they're end-to-end encrypted, so the relay only
   sees ciphertext;
-- everything else stays on your box: subscriptions live in `db.json`,
+- everything else stays on your box: subscriptions live in the database,
   and the signing key is a single PEM file in the data directory.
 
 ### One-time server setup
@@ -337,7 +358,7 @@ keys**, which means:
 
 3. **Restart the server.** That's it — the VAPID keypair is generated
    automatically on first use and stored as `vapid-private-key.pem`
-   next to `db.json`. **Keep that file**: it's what all subscriptions
+   next to the database. **Keep that file**: it's what all subscriptions
    are bound to, and losing it (e.g. wiping the data dir) silently
    breaks every enabled device until people toggle 🔔 off and on again.
 
@@ -379,7 +400,7 @@ per wheel:
 - *Notifications stopped after restoring a backup onto a fresh box* —
   backups made from the admin panel carry the push key, so this only
   happens with an older backup (a bare `db.json`) or a hand-copied
-  `db.json` without `vapid-private-key.pem`. Have everyone toggle 🔔 off
+  database without `vapid-private-key.pem`. Have everyone toggle 🔔 off
   and on again.
 - *One device went quiet* — browsers rotate or expire subscriptions now
   and then. The app re-registers on every login and the server drops
@@ -432,7 +453,7 @@ open **🛠️ Admin → Date polls** (admins only):
 - **how far ahead a poll reaches** (7–365 days, default 60) — how far
   into the future you can put candidate evenings up.
 
-Changes are saved to the server's `db.json` and take effect immediately
+Changes are saved to the server's database and take effect immediately
 for new and in-progress polls. The `WHEEL_TZ`, `WHEEL_EVENING_FROM` and
 `WHEEL_POLL_HORIZON_DAYS` env vars only set the starting defaults an admin
 can then override.
@@ -672,6 +693,58 @@ To restore:
 Backups from older versions (a bare `db.json`) still restore; they just
 don't carry the push key, so the server keeps the one it has.
 
+### Automatic daily backups
+
+The server also writes a full backup (same format) into
+`data/backups/` once a day and keeps the newest few — 7 by default; set
+the number, or 0 to switch it off, under **🛠️ Admin → Backup →
+Automatic backups**. The panel lists them with **💾 Download** and
+**↩️ Restore** (roll the whole server back to that day). They sit on the
+same disk as the database, so they protect against mistakes and bad
+updates rather than a lost disk: still download a backup now and then,
+or back up the whole data volume.
+
+## 🌐 Translations
+
+The app speaks English and Dutch. It picks the language from the
+browser; the menu at the top left switches (and remembers it). Error
+messages from the server and push notifications follow along — each
+person gets notifications in their own language.
+
+**Adding a language is one file.** English is the source: every text in
+the app is its own key. A language file maps those English texts to
+the new language:
+
+```jsonc
+// locales/de.json
+{
+  "_language": "Deutsch",
+  "messages": {
+    "Log in": "Anmelden",
+    "Hi {name} — let's build your first wheel 🎡": "Hallo {name} — bauen wir dein erstes Rad 🎡"
+  }
+}
+```
+
+Drop it in [`locales/`](locales) and restart nothing: the language menu
+picks it up. Copying [`locales/nl.json`](locales/nl.json) and translating
+its values is the quickest start. Keep the `{placeholders}` and any HTML
+tags as they are; anything left out simply shows in English. To see
+what a file still lacks:
+
+```bash
+python3 -m wheelapp.i18n_keys check de
+```
+
+For developers: in the frontend, wrap visible text in `t('…')`
+(`t('Hi {name}', { name })`), use `tn(n, 'one form', '{n} other form')`
+for counts, and `N_('…')` to mark constants that are translated where
+they're shown. Text in `index.html` is translated automatically. On the
+server, `abort(…)` messages are translated as they are; use
+`i18n.msg('… {x} …', x=…)` for messages with values in them. The test
+suite fails when `nl.json` misses a text or keeps one that's no longer
+used.
+
 ## Seed data & sources
 
 The two starting catalogues —
@@ -715,9 +788,15 @@ sites, blogs, hotel pages, …) via ✏️ edit.
   on it.
 - The wheel types and the tag/onboarding vocabulary (`budget`,
   `distance`, `vibes`, `seasons`, `party`, home regions, roam ranges)
-  are defined at the top of [`server.py`](server.py).
+  are defined at the top of [`wheelapp/core.py`](wheelapp/core.py).
+- The server code lives in [`wheelapp/`](wheelapp), one module per area
+  (`storage`, `accounts`, `oidc`, `push`, `calendars`, `wheel_api`,
+  `rounds`, `entries`, `polls`, `admin_api`, `backup`, `i18n`, …);
+  [`server.py`](server.py) is just the entry point.
 - Colors and styling live in [`styles.css`](styles.css); the frontend
-  logic is in [`app.js`](app.js) (loaded as an ES module), with the
+  logic is in [`app.js`](app.js) (loaded as an ES module), with the admin
+  panel in [`admin.js`](admin.js), the account and calendar screens in
+  [`account.js`](account.js), translations in [`i18n.js`](i18n.js), the
   shared constant tables in [`constants.js`](constants.js) and the
   pure, state-free helpers in [`utils.js`](utils.js). No build step —
   the browser loads the modules directly.
