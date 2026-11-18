@@ -45,13 +45,13 @@ export function currentLanguage() {
   return current;
 }
 
-export async function availableLanguages() {
-  try {
-    const res = await fetch('/api/i18n');
-    return (await res.json()).languages;
-  } catch {
-    return [{ code: SOURCE, name: 'English' }];
-  }
+let languagesPromise = null;
+export function availableLanguages() {
+  languagesPromise ||= fetch('/api/i18n')
+    .then((res) => res.json())
+    .then((data) => data.languages)
+    .catch(() => [{ code: SOURCE, name: 'English' }]);
+  return languagesPromise;
 }
 
 function storedLanguage() {
@@ -74,8 +74,10 @@ export async function initI18n() {
   const wanted = storedLanguage();
   const candidates = wanted ? [wanted] : (navigator.languages || [navigator.language || SOURCE])
     .flatMap((l) => [l, l.split('-')[0]]);
+  const offered = new Set((await availableLanguages()).map((l) => l.code));
   for (const code of candidates) {
-    if (code === SOURCE) break;
+    if (code.split('-')[0] === SOURCE) break; // English is built in
+    if (!offered.has(code)) continue;
     const catalog = await loadCatalog(code);
     if (catalog) {
       current = code;

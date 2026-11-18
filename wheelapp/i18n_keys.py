@@ -17,7 +17,7 @@ from html.parser import HTMLParser
 
 from .core import ROOT
 
-JS_FILES = ("app.js", "constants.js", "utils.js")
+JS_FILES = ("app.js", "admin.js", "account.js", "constants.js", "utils.js", "ui.js")
 STR = r"""(?:'((?:\\.|[^'\\])*)'|"((?:\\.|[^"\\])*)"|`((?:\\.|[^`\\$])*)`)"""
 JS_ONE = re.compile(r"(?<![\w.])(?:t|N_)\(\s*" + STR)
 JS_TN = re.compile(r"(?<![\w.])tn\([^,]+,\s*" + STR + r"\s*,\s*" + STR)
