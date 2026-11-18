@@ -47,6 +47,7 @@ import hmac
 import ipaddress
 import json
 import os
+import re
 import secrets
 import socket
 import subprocess
@@ -57,10 +58,10 @@ import urllib.request
 import uuid
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from urllib.parse import quote, urlparse
+from urllib.parse import quote, urlencode, urlparse
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError, available_timezones
 
-from flask import Flask, abort, jsonify, request, send_from_directory
+from flask import Flask, abort, jsonify, redirect, request, send_from_directory
 from werkzeug.exceptions import HTTPException
 
 try:  # push notifications are optional — everything else works without
@@ -592,6 +593,77 @@ def hash_password(password, salt_hex):
     ).hex()
 
 
+def password_ok(user, password):
+    """Whether `password` is this account's password. Accounts created
+    through single sign-on may have no password at all — those never
+    pass a password check (they log in through the identity provider,
+    or an admin sets them a password)."""
+    if not user or not user.get("password") or not user.get("salt"):
+        return False
+    return hmac.compare_digest(user["password"], hash_password(password, user["salt"]))
+
+
+# ── E-mail addresses ─────────────────────────────────────────────────
+# An account can carry one e-mail address. It's a second way to log in
+# (next to the name) and — more importantly — the key used to match an
+# existing local account to a single-sign-on identity the first time
+# someone logs in through the identity provider. So it is unique across
+# accounts, case-insensitively, and stored lower-cased. No mail is ever
+# sent; the address isn't verified by this server.
+MAX_EMAIL_LEN = 254
+EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def clean_email(value):
+    """A normalised e-mail address, '' for none. Aborts 400 on anything
+    that doesn't look like an address."""
+    email = str(value or "").strip().lower()
+    if not email:
+        return ""
+    if len(email) > MAX_EMAIL_LEN or not EMAIL_RE.match(email):
+        abort(400, description="that doesn't look like an e-mail address")
+    return email
+
+
+def user_by_email(db, email):
+    if not email:
+        return None
+    email = email.strip().lower()
+    return next((u for u in db["users"].values() if (u.get("email") or "") == email), None)
+
+
+def user_by_name(db, name):
+    name = name.strip().lower()
+    return next((u for u in db["users"].values() if u["name"].lower() == name), None)
+
+
+def user_by_login(db, ident):
+    """The account a login form's identifier points at: an e-mail address
+    when it contains an @ (names can't — see check_name), else a name."""
+    ident = ident.strip()
+    if not ident:
+        return None
+    if "@" in ident:
+        # a name from before names were barred from containing an @ still works
+        return user_by_email(db, ident) or user_by_name(db, ident)
+    return user_by_name(db, ident)
+
+
+def ensure_email_free(db, email, user_id=None):
+    other = user_by_email(db, email)
+    if other is not None and other["id"] != user_id:
+        abort(400, description="that e-mail address is already used by another account")
+
+
+def check_name(name):
+    """Display names double as log-in names, so they can't contain an @
+    (that would make them ambiguous with e-mail addresses)."""
+    if len(name) < 2:
+        abort(400, description="pick a name of at least 2 characters")
+    if "@" in name:
+        abort(400, description="a name can't contain an @ — put your e-mail address in the e-mail field")
+
+
 # ── Login throttling ─────────────────────────────────────────────────
 # Online password guessing is the realistic attack on a small,
 # network-exposed app. scrypt already makes each guess costly; this caps
@@ -602,7 +674,7 @@ def hash_password(password, salt_hex):
 # is fine here (single process; a restart just clears the counters).
 LOGIN_MAX_FAILS = 10       # wrong guesses tolerated within the window
 LOGIN_WINDOW = 15 * 60     # seconds the failures are counted over
-_login_fails = {}          # name(lower) -> [monotonic timestamps of recent fails]
+_login_fails = {}          # user id, or the typed identifier for unknown accounts -> [timestamps]
 _login_lock = threading.Lock()
 
 
@@ -750,7 +822,14 @@ def maps_api_key(db):
 def me_payload(db, user):
     wheels = [db["wheels"][wid] for wid in user.get("wheels", []) if wid in db["wheels"]]
     return {
-        "user": {"id": user["id"], "name": user["name"], "admin": bool(user.get("admin"))},
+        "user": {
+            "id": user["id"],
+            "name": user["name"],
+            "email": user.get("email") or "",
+            "admin": bool(user.get("admin")),
+            "has_password": bool(user.get("password")),
+            "sso_linked": bool(user.get("oidc_sub")),
+        },
         "prefs": user.get("prefs", {}),
         "wheels": [wheel_summary(db, w) for w in wheels],
         # wheels other people have shared with you, awaiting accept/decline
@@ -760,7 +839,14 @@ def me_payload(db, user):
         # the restaurant add/edit form only offers inline place search when
         # the server has a key configured; otherwise it falls back to a link
         "maps_enabled": bool(maps_api_key(db)),
+        # lets the account screen offer "link single sign-on"
+        "sso": sso_public(db),
     }
+
+
+def sso_public(db):
+    cfg = oidc_settings(db)
+    return {"enabled": cfg["enabled"], "label": cfg["button_label"]}
 
 
 def start_session(db, user):
@@ -789,17 +875,18 @@ def register():
     payload = request.get_json(force=True, silent=True) or {}
     name = str(payload.get("name", "")).strip()[:30]
     password = str(payload.get("password", ""))
+    email = clean_email(payload.get("email"))  # optional
     # Registering through an invite link carries the share code along, so
     # the new account starts with that wheel already in its list.
     code = str(payload.get("code", "")).strip().upper().replace(" ", "")
-    if len(name) < 2:
-        abort(400, description="pick a name of at least 2 characters")
+    check_name(name)
     if len(password) < MIN_PASSWORD_LEN:
         abort(400, description=f"pick a password of at least {MIN_PASSWORD_LEN} characters")
     with _lock:
         db = load_db()
-        if any(u["name"].lower() == name.lower() for u in db["users"].values()):
+        if user_by_name(db, name):
             abort(400, description="that name is already taken — log in instead?")
+        ensure_email_free(db, email)
         first_account = not db["users"]  # the very first account bootstraps the server
         # A code can be a wheel's share code (join that wheel) or an admin
         # account-invite (create an account, join nothing). Wheels win the
@@ -820,17 +907,8 @@ def register():
                 and wheel is None and invite is None:
             abort(403, description="registration is invite-only on this server right now — "
                                    "ask an admin for an invite link")
-        user = {
-            "id": "u-" + uuid.uuid4().hex[:10],
-            "name": name,
-            "salt": secrets.token_hex(16),
-            "wheels": [wheel["id"]] if wheel else [],
-            "prefs": {},
-            "admin": first_account,
-            "created": datetime.now(timezone.utc).isoformat(),
-        }
-        user["password"] = hash_password(password, user["salt"])
-        db["users"][user["id"]] = user
+        user = new_user(db, name, email=email, wheel=wheel)
+        set_password(user, password)
         if invite:
             db.setdefault("invites", {}).pop(code, None)  # single-use — spent now
         token = start_session(db, user)
@@ -841,22 +919,43 @@ def register():
         return jsonify({"token": token, "me": me}), 201
 
 
+def new_user(db, name, email="", wheel=None):
+    """Create (and store) a fresh account. The very first account on the
+    server becomes its admin. No password is set here — the caller does
+    that, or leaves it off for an account that logs in through SSO."""
+    user = {
+        "id": "u-" + uuid.uuid4().hex[:10],
+        "name": name,
+        "email": email,
+        "wheels": [wheel["id"]] if wheel else [],
+        "prefs": {},
+        "admin": not db["users"],
+        "created": datetime.now(timezone.utc).isoformat(),
+    }
+    db["users"][user["id"]] = user
+    return user
+
+
 @app.post("/api/auth/login")
 def login():
     payload = request.get_json(force=True, silent=True) or {}
-    name = str(payload.get("name", "")).strip()
+    # `login` is a name or an e-mail address; `name` is the older field
+    ident = str(payload.get("login") or payload.get("name") or "").strip()
     password = str(payload.get("password", ""))
-    retry = login_retry_after(name)
-    if retry:
-        abort(429, description="too many attempts on this name — "
-                               f"wait about {max(1, retry // 60)} min and try again")
     with _lock:
         db = load_db()
-        user = next((u for u in db["users"].values() if u["name"].lower() == name.lower()), None)
-        if not user or not hmac.compare_digest(user["password"], hash_password(password, user["salt"])):
-            record_login_fail(name)
-            abort(401, description="wrong name or password")
-        clear_login_fails(name)  # a good login wipes the slate
+        user = user_by_login(db, ident)
+        # Throttle per account, so guessing via the name and via the
+        # e-mail address draws from the same allowance.
+        key = user["id"] if user else ident
+        retry = login_retry_after(key)
+        if retry:
+            abort(429, description="too many attempts on this account — "
+                                   f"wait about {max(1, retry // 60)} min and try again")
+        if not password_ok(user, password):
+            record_login_fail(key)
+            abort(401, description="wrong name/e-mail or password")
+        clear_login_fails(key)  # a good login wipes the slate
         token = start_session(db, user)
         save_db(db)
         return jsonify({"token": token, "me": me_payload(db, user)})
@@ -911,11 +1010,451 @@ def change_password():
     with _lock:
         db = load_db()
         user = current_user(db)
-        if not hmac.compare_digest(user["password"], hash_password(current, user["salt"])):
+        # an SSO-only account has no password yet — it may set one freely
+        if user.get("password") and not password_ok(user, current):
             abort(403, description="that's not your current password")
         set_password(user, new_password)
         save_db(db)
     return jsonify({"changed": True})
+
+
+@app.put("/api/me/email")
+def change_email():
+    """Set, change or clear your own e-mail address. It's what links your
+    account to a single-sign-on identity, so changing it takes your
+    current password (an SSO-only account without one skips that)."""
+    payload = request.get_json(force=True, silent=True) or {}
+    email = clean_email(payload.get("email"))
+    password = str(payload.get("password", ""))
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        if user.get("password") and not password_ok(user, password):
+            abort(403, description="that's not your current password")
+        ensure_email_free(db, email, user["id"])
+        user["email"] = email
+        save_db(db)
+        return jsonify(me_payload(db, user))
+
+
+# ── Single sign-on (OpenID Connect, e.g. Authentik) ──────────────────
+# Optional: once an admin fills in an identity provider (Admin → Single
+# sign-on), the login screen grows a "Log in with …" button. It's the
+# standard authorization-code flow with PKCE, for a *confidential*
+# client: the browser is sent to the provider, comes back to
+# /api/auth/oidc/callback with a one-time code, and the server swaps that
+# code for tokens directly with the provider over TLS. Because the ID
+# token arrives straight from the provider's token endpoint (never via
+# the browser), OIDC Core §3.1.3.7 lets us rely on TLS instead of
+# verifying its signature — so this needs no JWT/crypto dependency. We
+# still check issuer, audience, expiry and nonce.
+#
+# Matching to local accounts, in order:
+#   1. an account already linked to this identity (by the provider's
+#      stable `sub` claim — not the e-mail, which can change);
+#   2. if "match by e-mail" is on: the account whose e-mail address equals
+#      the provider's — linked for good on that first login. By default
+#      the provider must vouch that the address is verified;
+#   3. otherwise a new account is created — but only where a password
+#      sign-up would be allowed too (open registration, an invite, or the
+#      admin's "SSO users may create accounts" switch).
+# A logged-in user can also link their account by hand (Account → Link),
+# which covers accounts whose e-mail differs from the provider's.
+OIDC_STATE_TTL = 10 * 60   # seconds a started login may take at the provider
+OIDC_HANDOFF_TTL = 2 * 60  # seconds the browser has to collect its session
+OIDC_DISCOVERY_TTL = 3600  # seconds the provider's metadata is cached
+OIDC_TIMEOUT = 10
+OIDC_MAX_BYTES = 1_000_000
+OIDC_MAX_PENDING = 500     # cap on in-flight logins, so they can't pile up
+OIDC_CALLBACK_PATH = "/api/auth/oidc/callback"
+OIDC_DEFAULT_LABEL = "Log in with SSO"
+# Binds a started login to the browser that started it. Without it,
+# someone could start a flow and talk somebody else into finishing it —
+# logging the victim into the attacker's account, or (worse) linking the
+# victim's identity to the attacker's account. SameSite=Lax still rides
+# along on the provider's top-level redirect back to us.
+OIDC_COOKIE = "wheel_oidc"
+
+_oidc_lock = threading.Lock()
+_oidc_pending = {}    # state -> {verifier, nonce, redirect_uri, mode, user_id, code, at}
+_oidc_handoffs = {}   # one-time code -> {token, joined, at}
+_oidc_discovery = {}  # issuer -> {"at": monotonic, "data": metadata}
+
+
+def oidc_settings(db):
+    """The single-sign-on configuration in force: what an admin stored,
+    falling back to the WHEEL_OIDC_* / WHEEL_PUBLIC_URL env vars (handy for
+    a docker-compose file). The client secret is in here — never send this
+    dict to a browser; see oidc_settings_view."""
+    stored = (db.get("settings") or {}).get("oidc") or {}
+
+    def pick(key, env):
+        return str(stored.get(key) or os.environ.get(env) or "").strip()
+
+    cfg = {
+        "issuer": pick("issuer", "WHEEL_OIDC_ISSUER"),
+        "client_id": pick("client_id", "WHEEL_OIDC_CLIENT_ID"),
+        "client_secret": pick("client_secret", "WHEEL_OIDC_CLIENT_SECRET"),
+        "public_url": pick("public_url", "WHEEL_PUBLIC_URL").rstrip("/"),
+        "button_label": str(stored.get("button_label") or "").strip() or OIDC_DEFAULT_LABEL,
+        "match_email": bool(stored.get("match_email", True)),
+        "require_verified_email": bool(stored.get("require_verified_email", True)),
+        "allow_signup": bool(stored.get("allow_signup", False)),
+    }
+    cfg["enabled"] = bool(cfg["issuer"] and cfg["client_id"] and cfg["client_secret"])
+    return cfg
+
+
+def oidc_redirect_uri(cfg):
+    """Where the provider sends the browser back to. Behind a reverse
+    proxy the request's own URL may say http:// or an internal host, so an
+    admin can pin the public address (Admin → Single sign-on)."""
+    base = cfg["public_url"] or request.url_root.rstrip("/")
+    return base + OIDC_CALLBACK_PATH
+
+
+def oidc_settings_view(db):
+    """The SSO settings for the admin panel — the secret only as a flag."""
+    cfg = oidc_settings(db)
+    view = {k: v for k, v in cfg.items() if k != "client_secret"}
+    view["client_secret_set"] = bool(cfg["client_secret"])
+    view["redirect_uri"] = oidc_redirect_uri(cfg)
+    view["linked_users"] = sum(1 for u in db["users"].values() if u.get("oidc_sub"))
+    return view
+
+
+def _oidc_http(url, data=None, headers=None):
+    """GET (or form-POST, when data is given) a JSON document from the
+    identity provider. Tests replace this. Raises ValueError with a
+    human-readable reason on any failure."""
+    body = urlencode(data).encode("ascii") if data is not None else None
+    req = urllib.request.Request(url, data=body, headers={
+        "Accept": "application/json",
+        "User-Agent": "wheel-of-choice",
+        **({"Content-Type": "application/x-www-form-urlencoded"} if body else {}),
+        **(headers or {}),
+    })
+    try:
+        with urllib.request.urlopen(req, timeout=OIDC_TIMEOUT) as resp:
+            raw = resp.read(OIDC_MAX_BYTES + 1)
+    except urllib.error.HTTPError as err:
+        detail = ""
+        try:
+            detail = json.loads(err.read(4096)).get("error_description") or ""
+        except Exception:
+            pass
+        raise ValueError(f"the identity provider answered {err.code}"
+                         + (f": {detail}" if detail else "")) from None
+    except (urllib.error.URLError, OSError) as err:
+        raise ValueError(f"can't reach the identity provider ({getattr(err, 'reason', err)})") from None
+    if len(raw) > OIDC_MAX_BYTES:
+        raise ValueError("the identity provider sent an oversized response")
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        raise ValueError("the identity provider didn't answer with JSON") from None
+    if not isinstance(doc, dict):
+        raise ValueError("the identity provider sent something unexpected")
+    return doc
+
+
+def oidc_discover(issuer, fresh=False):
+    """The provider's metadata (/.well-known/openid-configuration), cached.
+    For Authentik the issuer looks like
+    https://auth.example.com/application/o/<app-slug>/"""
+    now = time.monotonic()
+    with _oidc_lock:
+        hit = _oidc_discovery.get(issuer)
+        if hit and not fresh and now - hit["at"] < OIDC_DISCOVERY_TTL:
+            return hit["data"]
+    meta = _oidc_http(issuer.rstrip("/") + "/.well-known/openid-configuration")
+    for key in ("issuer", "authorization_endpoint", "token_endpoint"):
+        if not isinstance(meta.get(key), str) or not meta[key]:
+            raise ValueError(f"the provider's metadata has no {key}")
+    if meta["issuer"].rstrip("/") != issuer.rstrip("/"):
+        raise ValueError(f"the provider calls itself {meta['issuer']} — "
+                         "put exactly that in the issuer field")
+    with _oidc_lock:
+        _oidc_discovery[issuer] = {"at": now, "data": meta}
+    return meta
+
+
+def _b64url_json(segment):
+    pad = "=" * (-len(segment) % 4)
+    return json.loads(base64.urlsafe_b64decode(segment + pad))
+
+
+def oidc_exchange(cfg, pending, code):
+    """Swap the authorization code for tokens and return the identity's
+    claims (ID token, topped up from the userinfo endpoint)."""
+    meta = oidc_discover(cfg["issuer"])
+    basic = base64.b64encode(
+        f"{quote(cfg['client_id'], safe='')}:{quote(cfg['client_secret'], safe='')}".encode()
+    ).decode()
+    tokens = _oidc_http(meta["token_endpoint"], data={
+        "grant_type": "authorization_code",
+        "code": code,
+        "redirect_uri": pending["redirect_uri"],
+        "code_verifier": pending["verifier"],
+    }, headers={"Authorization": f"Basic {basic}"})
+    id_token = tokens.get("id_token")
+    if not isinstance(id_token, str) or id_token.count(".") != 2:
+        raise ValueError("the identity provider sent no ID token — is the 'openid' scope allowed?")
+    try:
+        claims = _b64url_json(id_token.split(".")[1])
+    except (ValueError, TypeError):
+        raise ValueError("the identity provider sent an unreadable ID token") from None
+    if not isinstance(claims, dict):
+        raise ValueError("the identity provider sent an unreadable ID token")
+    aud = claims.get("aud")
+    auds = aud if isinstance(aud, list) else [aud]
+    if str(claims.get("iss", "")).rstrip("/") != meta["issuer"].rstrip("/"):
+        raise ValueError("the ID token was issued by someone else")
+    if cfg["client_id"] not in auds:
+        raise ValueError("the ID token is meant for another application")
+    try:
+        expired = float(claims.get("exp", 0)) < time.time() - 60
+    except (TypeError, ValueError):
+        expired = True
+    if expired:
+        raise ValueError("the ID token has expired — is the server's clock right?")
+    if not hmac.compare_digest(str(claims.get("nonce", "")), pending["nonce"]):
+        raise ValueError("the ID token doesn't belong to this login attempt")
+    if not claims.get("sub"):
+        raise ValueError("the ID token names no user")
+    # Authentik can leave profile/e-mail claims out of the ID token; the
+    # userinfo endpoint always has them.
+    if meta.get("userinfo_endpoint") and tokens.get("access_token"):
+        try:
+            info = _oidc_http(meta["userinfo_endpoint"],
+                              headers={"Authorization": f"Bearer {tokens['access_token']}"})
+        except ValueError:
+            info = {}
+        if str(info.get("sub", "")) == str(claims["sub"]):
+            claims = {**claims, **info}
+    claims["sub"] = str(claims["sub"])
+    return claims
+
+
+def user_by_oidc_sub(db, sub):
+    return next((u for u in db["users"].values() if u.get("oidc_sub") == sub), None)
+
+
+def email_is_verified(claims):
+    v = claims.get("email_verified")
+    return v is True or (isinstance(v, str) and v.lower() == "true")
+
+
+def sso_display_name(db, claims):
+    """A free, valid display name for an account created through SSO:
+    the provider's username, else its full name, else the e-mail's local
+    part — de-duplicated with a number."""
+    raw = ""
+    for key in ("preferred_username", "nickname", "name", "given_name"):
+        if isinstance(claims.get(key), str) and claims[key].strip():
+            raw = claims[key]
+            break
+    if not raw and isinstance(claims.get("email"), str):
+        raw = claims["email"].split("@")[0]
+    base = " ".join(raw.replace("@", " ").split())[:26] or "user"
+    if len(base) < 2:
+        base = (base + "-user")[:26]
+    name, n = base, 2
+    while user_by_name(db, name):
+        name, n = f"{base} {n}", n + 1
+    return name
+
+
+def _prune_oidc(now):
+    for store, ttl in ((_oidc_pending, OIDC_STATE_TTL), (_oidc_handoffs, OIDC_HANDOFF_TTL)):
+        for key in [k for k, v in store.items() if now - v["at"] > ttl]:
+            store.pop(key, None)
+
+
+def _sso_bounce(**params):
+    """Back to the app, with the outcome in the query string."""
+    resp = redirect("/?" + urlencode(params), code=302)
+    resp.delete_cookie(OIDC_COOKIE, path="/api/auth/oidc")
+    return resp
+
+
+@app.post("/api/auth/oidc/start")
+def oidc_start():
+    """Begin an SSO login (or, with a valid Bearer token and mode=link,
+    linking the logged-in account). Returns the provider URL for the
+    browser to go to; a JSON call rather than a plain link so that linking
+    can carry the session token."""
+    payload = request.get_json(force=True, silent=True) or {}
+    mode = "link" if payload.get("mode") == "link" else "login"
+    code = str(payload.get("code", "")).strip().upper().replace(" ", "")[:20]
+    with _lock:
+        db = load_db()
+        cfg = oidc_settings(db)
+        if not cfg["enabled"]:
+            abort(404, description="single sign-on isn't set up on this server")
+        user_id = current_user(db)["id"] if mode == "link" else None
+    try:
+        meta = oidc_discover(cfg["issuer"])
+    except ValueError as err:
+        abort(502, description=str(err))
+    state = secrets.token_urlsafe(24)
+    nonce = secrets.token_urlsafe(24)
+    verifier = secrets.token_urlsafe(48)
+    challenge = base64.urlsafe_b64encode(
+        hashlib.sha256(verifier.encode("ascii")).digest()).decode().rstrip("=")
+    redirect_uri = oidc_redirect_uri(cfg)
+    browser = secrets.token_urlsafe(24)
+    now = time.monotonic()
+    with _oidc_lock:
+        _prune_oidc(now)
+        if len(_oidc_pending) >= OIDC_MAX_PENDING:
+            abort(429, description="too many logins in progress — try again in a few minutes")
+        _oidc_pending[state] = {
+            "verifier": verifier, "nonce": nonce, "redirect_uri": redirect_uri,
+            "mode": mode, "user_id": user_id, "code": code, "at": now,
+            "browser": hashlib.sha256(browser.encode()).hexdigest(),
+        }
+    sep = "&" if "?" in meta["authorization_endpoint"] else "?"
+    url = meta["authorization_endpoint"] + sep + urlencode({
+        "response_type": "code",
+        "client_id": cfg["client_id"],
+        "redirect_uri": redirect_uri,
+        "scope": "openid email profile",
+        "state": state,
+        "nonce": nonce,
+        "code_challenge": challenge,
+        "code_challenge_method": "S256",
+    })
+    resp = jsonify({"url": url})
+    resp.set_cookie(OIDC_COOKIE, browser, max_age=OIDC_STATE_TTL, path="/api/auth/oidc",
+                    httponly=True, samesite="Lax",
+                    secure=redirect_uri.startswith("https://"))
+    return resp
+
+
+@app.get(OIDC_CALLBACK_PATH)
+def oidc_callback():
+    """The provider sends the browser back here. Works out which local
+    account this identity is (see the section comment above), starts a
+    session for it and bounces back to the app with a short-lived
+    one-time code; the app trades that for its token via /finish, so the
+    session token itself never appears in a URL."""
+    state = request.args.get("state", "")
+    with _oidc_lock:
+        _prune_oidc(time.monotonic())
+        pending = _oidc_pending.pop(state, None)
+    if pending is None:
+        return _sso_bounce(sso_error="that sign-in link expired or was already used — try again")
+    browser = request.cookies.get(OIDC_COOKIE, "")
+    if not hmac.compare_digest(hashlib.sha256(browser.encode()).hexdigest(), pending["browser"]):
+        return _sso_bounce(sso_error="this sign-in was started in another browser — start it again here")
+    if request.args.get("error"):
+        reason = request.args.get("error_description") or request.args.get("error")
+        return _sso_bounce(sso_error=f"the identity provider said no: {reason[:200]}")
+    with _lock:
+        cfg = oidc_settings(load_db())
+    if not cfg["enabled"]:
+        return _sso_bounce(sso_error="single sign-on isn't set up on this server")
+    try:
+        claims = oidc_exchange(cfg, pending, request.args.get("code", ""))
+    except ValueError as err:
+        return _sso_bounce(sso_error=str(err))
+    sub = claims["sub"]
+    email = str(claims.get("email") or "").strip().lower()
+    if email and (len(email) > MAX_EMAIL_LEN or not EMAIL_RE.match(email)):
+        email = ""
+
+    with _lock:
+        db = load_db()
+        owner = user_by_oidc_sub(db, sub)
+        if pending["mode"] == "link":
+            user = db["users"].get(pending["user_id"])
+            if user is None:
+                return _sso_bounce(sso_error="your account is gone — log in again")
+            if owner is not None and owner["id"] != user["id"]:
+                return _sso_bounce(sso_error=f"that sign-on identity is already linked to {owner['name']}")
+            user["oidc_sub"] = sub
+            if not user.get("email") and email and not user_by_email(db, email):
+                user["email"] = email
+            save_db(db)
+            return _sso_bounce(sso="linked")
+
+        user, joined = owner, None
+        if user is None and cfg["match_email"] and email:
+            match = user_by_email(db, email)
+            if match is not None:
+                if match.get("oidc_sub"):
+                    return _sso_bounce(sso_error=(
+                        f"the account with {email} is linked to a different sign-on identity — "
+                        "ask an admin to unlink it"))
+                if cfg["require_verified_email"] and not email_is_verified(claims):
+                    return _sso_bounce(sso_error=(
+                        f"an account with {email} exists, but the identity provider doesn't "
+                        "vouch that the address is verified — log in with your password and "
+                        "link sign-on from your account settings instead"))
+                user = match
+                user["oidc_sub"] = sub
+        if user is None:
+            code = pending["code"]
+            wheel = next((w for w in db["wheels"].values() if code and w["code"] == code), None)
+            invite = None if wheel or not code else db.get("invites", {}).get(code)
+            allowed = (not db["users"] or settings_view(db)["registration_open"]
+                       or cfg["allow_signup"] or wheel is not None or invite is not None)
+            if not allowed:
+                who = email or claims.get("preferred_username") or "this identity"
+                return _sso_bounce(sso_error=(
+                    f"there's no account here for {who} — ask an admin to add your e-mail "
+                    "address to your account, or for an invite"))
+            free_email = email if email and not user_by_email(db, email) else ""
+            user = new_user(db, sso_display_name(db, claims), email=free_email, wheel=wheel)
+            user["oidc_sub"] = sub
+            if invite:
+                db.setdefault("invites", {}).pop(code, None)
+            if wheel:
+                joined = wheel["id"]
+        clear_login_fails(user["id"])
+        token = start_session(db, user)
+        save_db(db)
+    handoff = secrets.token_urlsafe(24)
+    with _oidc_lock:
+        _oidc_handoffs[handoff] = {"token": token, "joined": joined, "at": time.monotonic()}
+    return _sso_bounce(sso=handoff)
+
+
+@app.post("/api/auth/oidc/finish")
+def oidc_finish():
+    """Trade the one-time code from the callback bounce for the session."""
+    payload = request.get_json(force=True, silent=True) or {}
+    code = str(payload.get("code", ""))
+    with _oidc_lock:
+        _prune_oidc(time.monotonic())
+        handoff = _oidc_handoffs.pop(code, None)
+    if handoff is None:
+        abort(400, description="that sign-in expired — try again")
+    with _lock:
+        db = load_db()
+        session = db["sessions"].get(handoff["token"])
+        user = db["users"].get(session["user"]) if session else None
+        if user is None:
+            abort(400, description="that sign-in expired — try again")
+        me = me_payload(db, user)
+    if handoff["joined"]:
+        me["joined"] = handoff["joined"]
+    return jsonify({"token": handoff["token"], "me": me})
+
+
+@app.post("/api/me/sso/unlink")
+def unlink_own_sso():
+    """Detach your account from its sign-on identity. Only with a password
+    to fall back on — otherwise you'd lock yourself out."""
+    with _lock:
+        db = load_db()
+        user = current_user(db)
+        if not user.get("password"):
+            abort(400, description="set a password first — otherwise you couldn't log in anymore")
+        user.pop("oidc_sub", None)
+        save_db(db)
+        return jsonify(me_payload(db, user))
 
 
 # ── Push notifications (Web Push / VAPID) ────────────────────────────
@@ -1869,7 +2408,10 @@ def admin_user_list(db):
     return [{
         "id": u["id"],
         "name": u["name"],
+        "email": u.get("email") or "",
         "admin": bool(u.get("admin")),
+        "has_password": bool(u.get("password")),
+        "sso_linked": bool(u.get("oidc_sub")),
         "created": u.get("created"),
         "wheel_count": len(u.get("wheels", [])),
         "sharing_with": sharing_with(u),
@@ -2022,9 +2564,99 @@ def admin_reset_password(user_id):
         set_password(target, new_password)
         # force the target to log back in everywhere with the new password
         db["sessions"] = {t: s for t, s in db["sessions"].items() if s["user"] != user_id}
-        clear_login_fails(target["name"])  # don't punish them for the lock-out
+        clear_login_fails(target["id"])  # don't punish them for the lock-out
         save_db(db)
     return jsonify({"reset": True})
+
+
+@app.put("/api/admin/users/<user_id>/email")
+def admin_set_email(user_id):
+    """Give an account its e-mail address (or clear it) — the step that
+    lets an existing account be matched to its single-sign-on identity."""
+    payload = request.get_json(force=True, silent=True) or {}
+    email = clean_email(payload.get("email"))
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        target = db["users"].get(user_id)
+        if target is None:
+            abort(404, description="no such user")
+        ensure_email_free(db, email, user_id)
+        target["email"] = email
+        save_db(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.post("/api/admin/users/<user_id>/unlink-sso")
+def admin_unlink_sso(user_id):
+    """Detach an account from its sign-on identity, e.g. when it got
+    matched to the wrong person. Their next SSO login matches afresh."""
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        target = db["users"].get(user_id)
+        if target is None:
+            abort(404, description="no such user")
+        target.pop("oidc_sub", None)
+        save_db(db)
+        return jsonify(admin_user_list(db))
+
+
+@app.get("/api/admin/sso")
+def admin_get_sso():
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        return jsonify(oidc_settings_view(db))
+
+
+@app.put("/api/admin/sso")
+def admin_put_sso():
+    """Configure single sign-on. An omitted or empty client_secret keeps
+    the stored one (the panel never sees it); clear_secret removes it."""
+    payload = request.get_json(force=True, silent=True) or {}
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        stored = db.setdefault("settings", {}).setdefault("oidc", {})
+        for key, cap in (("issuer", 300), ("client_id", 200), ("public_url", 300),
+                         ("button_label", 40)):
+            if key in payload:
+                value = str(payload.get(key) or "").strip()[:cap]
+                if key in ("issuer", "public_url") and value:
+                    parsed = urlparse(value)
+                    if parsed.scheme not in ("http", "https") or not parsed.netloc:
+                        abort(400, description=f"the {key.replace('_', ' ')} must be an http(s):// address")
+                    if key == "public_url":
+                        value = value.rstrip("/")
+                stored[key] = value
+        if payload.get("client_secret"):
+            stored["client_secret"] = str(payload["client_secret"]).strip()[:500]
+        if payload.get("clear_secret"):
+            stored.pop("client_secret", None)
+        for key in ("match_email", "require_verified_email", "allow_signup"):
+            if key in payload:
+                stored[key] = bool(payload.get(key))
+        save_db(db)
+        return jsonify(oidc_settings_view(db))
+
+
+@app.post("/api/admin/sso/test")
+def admin_test_sso():
+    """Fetch the provider's metadata now, so a typo in the issuer shows up
+    in the admin panel instead of on someone's login."""
+    with _lock:
+        db = load_db()
+        require_admin(db)
+        cfg = oidc_settings(db)
+    if not cfg["issuer"]:
+        abort(400, description="fill in the issuer URL first")
+    try:
+        meta = oidc_discover(cfg["issuer"], fresh=True)
+    except ValueError as err:
+        abort(502, description=str(err))
+    return jsonify({"ok": True, "issuer": meta["issuer"],
+                    "authorization_endpoint": meta["authorization_endpoint"]})
 
 
 @app.post("/api/admin/users/<user_id>/unshare")
@@ -2172,7 +2804,8 @@ def public_config():
     with _lock:
         db = load_db()
         open_reg = settings_view(db)["registration_open"] or not db["users"]
-    return jsonify({"registration_open": bool(open_reg)})
+        sso = sso_public(db)
+    return jsonify({"registration_open": bool(open_reg), "sso": sso})
 
 
 # ── Validation ───────────────────────────────────────────────────────

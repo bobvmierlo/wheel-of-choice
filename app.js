@@ -28,6 +28,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   //   ?invite=CODE — an admin account invite: registering just creates
   //                  the account (used when open registration is off).
   const urlParams = new URLSearchParams(location.search);
+  const SSO_CODE_KEY = 'wheel-sso-code';
   const accountInvite = urlParams.has('invite') && !urlParams.has('join');
   let inviteCode = (urlParams.get('join') || urlParams.get('invite') || '')
     .toUpperCase().replace(/\s+/g, '');
@@ -36,10 +37,20 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   // wheel comes from the hash; once its data loads we pop the info modal on
   // that entry so its calendar buttons are one tap away. See maybeOpenDinner.
   let pendingDinnerId = urlParams.get('dinner') || '';
-  if (urlParams.has('join') || urlParams.has('invite') || urlParams.has('dinner')) {
-    urlParams.delete('join');
-    urlParams.delete('invite');
-    urlParams.delete('dinner');
+  // ?sso=<one-time code> / ?sso=linked / ?sso_error=<msg> — the server's
+  // bounce back from a single-sign-on round trip (see startSso).
+  const ssoResult = urlParams.get('sso') || '';
+  const ssoError = urlParams.get('sso_error') || '';
+  if (ssoResult || ssoError) {
+    // an invite link followed before signing on survives the round trip
+    try {
+      inviteCode = inviteCode || sessionStorage.getItem(SSO_CODE_KEY) || '';
+      sessionStorage.removeItem(SSO_CODE_KEY);
+    } catch { /* storage blocked — the invite is just lost */ }
+  }
+  const PARAMS_TO_STRIP = ['join', 'invite', 'dinner', 'sso', 'sso_error'];
+  if (PARAMS_TO_STRIP.some((k) => urlParams.has(k))) {
+    PARAMS_TO_STRIP.forEach((k) => urlParams.delete(k));
     const qs = urlParams.toString();
     history.replaceState(null, '', location.pathname + (qs ? `?${qs}` : '') + location.hash);
   }
@@ -214,6 +225,11 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const authPassword = document.getElementById('auth-password');
   const authSubmit = document.getElementById('auth-submit');
   const authError = document.getElementById('auth-error');
+  const authNameLabel = document.getElementById('auth-name-label');
+  const authEmailRow = document.getElementById('auth-email-row');
+  const authEmail = document.getElementById('auth-email');
+  const ssoBlock = document.getElementById('sso-block');
+  const ssoBtn = document.getElementById('sso-btn');
   const authHint = document.getElementById('auth-hint');
 
   const onboardTitle = document.getElementById('onboard-title');
@@ -480,6 +496,13 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       });
       const registering = authMode === 'register';
       authSubmit.textContent = registering ? 'Create account' : 'Log in';
+      // logging in takes a name *or* an e-mail; registering asks for both
+      authNameLabel.textContent = registering ? 'Your name' : 'Name or e-mail';
+      authName.maxLength = registering ? 30 : 254;
+      authName.placeholder = registering ? 'e.g. Bob' : 'Your name or e-mail address';
+      authName.autocomplete = registering ? 'nickname' : 'username';
+      authEmailRow.hidden = !registering;
+      authEmail.autocomplete = registering ? 'email' : 'off';
       authPassword.autocomplete = registering ? 'new-password' : 'current-password';
       // Only new passwords must clear the 8-char floor. Login stays lenient
       // so accounts created under the old 4-char rule can still get in.
@@ -494,7 +517,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     authError.textContent = '';
     authSubmit.disabled = true;
     try {
-      const body = { name: authName.value.trim(), password: authPassword.value };
+      const body = authMode === 'login'
+        ? { login: authName.value.trim(), password: authPassword.value }
+        : { name: authName.value.trim(), password: authPassword.value, email: authEmail.value.trim() };
       if (authMode === 'register' && inviteCode) {
         body.code = inviteCode;
       }
@@ -531,6 +556,57 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     try { await rootApi('/auth/logout', { method: 'POST' }); } catch { /* logging out anyway */ }
     forceLogout();
   });
+
+  // ── Single sign-on ────────────────────────────────────────────────
+  // The server hands back the identity provider's URL; we go there, and
+  // the provider sends the browser back to /api/auth/oidc/callback, which
+  // bounces to /?sso=<one-time code>. finishSso trades that code for a
+  // session token. mode 'link' attaches the logged-in account instead.
+  async function startSso(mode = 'login') {
+    const body = { mode };
+    if (inviteCode) {
+      body.code = inviteCode;
+      try { sessionStorage.setItem(SSO_CODE_KEY, inviteCode); } catch { /* fine */ }
+    }
+    const { url } = await rootApi('/auth/oidc/start', { method: 'POST', body: JSON.stringify(body) });
+    location.assign(url);
+  }
+
+  ssoBtn.addEventListener('click', async () => {
+    authError.textContent = '';
+    ssoBtn.disabled = true;
+    try {
+      await startSso('login');
+    } catch (err) {
+      authError.textContent = `⚠️ ${err.message}`;
+      ssoBtn.disabled = false;
+    }
+  });
+
+  function showSsoButton(sso) {
+    ssoBlock.hidden = !(sso && sso.enabled);
+    if (sso && sso.enabled) ssoBtn.textContent = `🔐 ${sso.label}`;
+  }
+
+  async function finishSso(code) {
+    showView('auth');
+    authError.textContent = '⏳ Signing you in…';
+    try {
+      const result = await rootApi('/auth/oidc/finish', { method: 'POST', body: JSON.stringify({ code }) });
+      authError.textContent = '';
+      token = result.token;
+      localStorage.setItem(TOKEN_KEY, token);
+      me = result.me;
+      if (me.joined) {
+        justJoined = true;
+        joinedWheelId = me.joined;
+      }
+      applyMe();
+    } catch (err) {
+      authError.textContent = `⚠️ ${err.message}`;
+      applyRegistrationGate();
+    }
+  }
 
   // ── Create / join a wheel ─────────────────────────────────────────
   const onboardAnswers = {
@@ -1778,12 +1854,103 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   const passwordState = document.getElementById('password-state');
   const passwordError = document.getElementById('password-error');
 
-  passwordBtn.addEventListener('click', () => {
+  const passwordCurrentRow = document.getElementById('password-current-row');
+  const passwordHint = document.getElementById('password-hint');
+  const emailForm = document.getElementById('email-form');
+  const accountEmail = document.getElementById('account-email');
+  const emailPasswordRow = document.getElementById('email-password-row');
+  const emailPassword = document.getElementById('email-password');
+  const emailSubmit = document.getElementById('email-submit');
+  const emailState = document.getElementById('email-state');
+  const emailError = document.getElementById('email-error');
+  const accountSso = document.getElementById('account-sso');
+  const accountSsoStatus = document.getElementById('account-sso-status');
+  const accountSsoLink = document.getElementById('account-sso-link');
+  const accountSsoUnlink = document.getElementById('account-sso-unlink');
+  const accountSsoState = document.getElementById('account-sso-state');
+  const accountSsoError = document.getElementById('account-sso-error');
+
+  // Fill the account modal from `me` — e-mail, sign-on link, password.
+  // Accounts created through single sign-on have no password yet: they
+  // skip the "current password" boxes and can set a first one.
+  function renderAccount() {
+    const u = me.user;
+    const hasPw = !!u.has_password;
+    accountEmail.value = u.email || '';
+    emailPasswordRow.hidden = !hasPw;
+    emailPassword.required = hasPw;
+    passwordCurrentRow.hidden = !hasPw;
+    passwordCurrent.required = hasPw;
+    passwordHint.textContent = hasPw
+      ? 'Pick a new password for your account. You\'ll stay logged in on this device; other devices keep their session too.'
+      : 'Your account signs in through single sign-on and has no password. Set one to also be able to log in with your name or e-mail.';
+    passwordSubmit.textContent = hasPw ? 'Change password' : 'Set password';
+    const sso = me.sso || {};
+    accountSso.hidden = !(sso.enabled || u.sso_linked);
+    accountSsoStatus.textContent = u.sso_linked
+      ? '🔗 Your account is linked — you can log in with the sign-on button.'
+      : 'Not linked yet. Link it to log in with the sign-on button from now on — handy when your e-mail address here differs from the one your identity provider has.';
+    accountSsoLink.hidden = u.sso_linked || !sso.enabled;
+    accountSsoLink.textContent = `🔗 ${sso.label || 'Link sign-on'}`.replace(/^🔗 Log in with/, '🔗 Link');
+    accountSsoUnlink.hidden = !u.sso_linked;
+    accountSsoUnlink.disabled = !hasPw;
+    accountSsoUnlink.title = hasPw ? 'Detach your account from single sign-on' : 'Set a password first, or you couldn\'t log in anymore';
+  }
+
+  function openAccount(ssoMessage = '', ssoErr = '') {
     passwordForm.reset();
-    passwordState.textContent = '';
-    passwordError.textContent = '';
+    emailForm.reset();
+    for (const el of [passwordState, passwordError, emailState, emailError]) el.textContent = '';
+    accountSsoState.textContent = ssoMessage;
+    accountSsoError.textContent = ssoErr ? `⚠️ ${ssoErr}` : '';
+    renderAccount();
     passwordModal.showModal();
-    passwordCurrent.focus();
+    if (!ssoMessage && !ssoErr) accountEmail.focus();
+  }
+
+  passwordBtn.addEventListener('click', () => openAccount());
+
+  emailForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    emailError.textContent = '';
+    emailState.textContent = '';
+    emailSubmit.disabled = true;
+    try {
+      me = { ...me, ...(await rootApi('/me/email', {
+        method: 'PUT',
+        body: JSON.stringify({ email: accountEmail.value.trim(), password: emailPassword.value }),
+      })) };
+      emailPassword.value = '';
+      renderAccount();
+      emailState.textContent = me.user.email ? '✅ E-mail saved' : '✅ E-mail removed';
+    } catch (err) {
+      emailError.textContent = `⚠️ ${err.message}`;
+    } finally {
+      emailSubmit.disabled = false;
+    }
+  });
+
+  accountSsoLink.addEventListener('click', async () => {
+    accountSsoError.textContent = '';
+    accountSsoLink.disabled = true;
+    try {
+      await startSso('link');
+    } catch (err) {
+      accountSsoError.textContent = `⚠️ ${err.message}`;
+      accountSsoLink.disabled = false;
+    }
+  });
+
+  accountSsoUnlink.addEventListener('click', async () => {
+    if (!confirm('Unlink single sign-on? You\'ll log in with your password from now on.')) return;
+    accountSsoError.textContent = '';
+    try {
+      me = { ...me, ...(await rootApi('/me/sso/unlink', { method: 'POST' })) };
+      renderAccount();
+      accountSsoState.textContent = '✅ Unlinked';
+    } catch (err) {
+      accountSsoError.textContent = `⚠️ ${err.message}`;
+    }
   });
   closePasswordBtn.addEventListener('click', () => passwordModal.close());
 
@@ -1802,7 +1969,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         body: JSON.stringify({ current: passwordCurrent.value, new: passwordNew.value }),
       });
       passwordForm.reset();
-      passwordState.textContent = '✅ Password changed';
+      passwordState.textContent = me.user.has_password ? '✅ Password changed' : '✅ Password set';
+      me.user.has_password = true;
+      renderAccount();
       setTimeout(() => { if (passwordModal.open) passwordModal.close(); }, 1200);
     } catch (err) {
       passwordError.textContent = `⚠️ ${err.message}`;
@@ -1838,6 +2007,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
     adminModal.showModal();
     loadVersion(); // another admin may have updated in the meantime
     loadAdminSettings(); // another admin may have retuned the polls
+    loadSsoSettings();
     registrationStatus.textContent = '';
     loadInvites(); // list any pending invite links
     startUpdatePolling(); // watch git for a newer commit while the panel's open
@@ -1938,6 +2108,83 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       mapsKeyStatus.textContent = `⚠️ ${err.message}`;
     } finally {
       mapsKeySaveBtn.disabled = false;
+    }
+  });
+
+  // ── Single sign-on settings ───────────────────────────────────────
+  const ssoIssuer = document.getElementById('sso-issuer');
+  const ssoClientId = document.getElementById('sso-client-id');
+  const ssoClientSecret = document.getElementById('sso-client-secret');
+  const ssoSecretHint = document.getElementById('sso-secret-hint');
+  const ssoPublicUrl = document.getElementById('sso-public-url');
+  const ssoButtonLabel = document.getElementById('sso-button-label');
+  const ssoMatchEmail = document.getElementById('sso-match-email');
+  const ssoRequireVerified = document.getElementById('sso-require-verified');
+  const ssoAllowSignup = document.getElementById('sso-allow-signup');
+  const ssoRedirectUri = document.getElementById('sso-redirect-uri');
+  const ssoSaveBtn = document.getElementById('sso-save-btn');
+  const ssoTestBtn = document.getElementById('sso-test-btn');
+  const ssoStatus = document.getElementById('sso-status');
+
+  function fillSso(v) {
+    ssoIssuer.value = v.issuer || '';
+    ssoClientId.value = v.client_id || '';
+    ssoClientSecret.value = '';
+    ssoClientSecret.placeholder = v.client_secret_set ? '•••••• (stored)' : 'Paste the client secret';
+    ssoSecretHint.textContent = v.client_secret_set
+      ? 'A secret is stored. Leave empty to keep it, or paste a new one to replace it.'
+      : 'Stored on the server, never shown again.';
+    ssoPublicUrl.value = v.public_url || '';
+    ssoButtonLabel.value = v.button_label || '';
+    ssoMatchEmail.checked = !!v.match_email;
+    ssoRequireVerified.checked = !!v.require_verified_email;
+    ssoAllowSignup.checked = !!v.allow_signup;
+    ssoRedirectUri.textContent = v.redirect_uri || '—';
+    if (me) me.sso = { enabled: !!v.enabled, label: v.button_label };
+    return v;
+  }
+
+  async function loadSsoSettings() {
+    ssoStatus.textContent = '';
+    try {
+      fillSso(await rootApi('/admin/sso'));
+    } catch (err) {
+      ssoStatus.textContent = `⚠️ ${err.message}`;
+    }
+  }
+
+  ssoSaveBtn.addEventListener('click', async () => {
+    ssoStatus.textContent = '⏳ Saving…';
+    ssoSaveBtn.disabled = true;
+    const body = {
+      issuer: ssoIssuer.value.trim(),
+      client_id: ssoClientId.value.trim(),
+      public_url: ssoPublicUrl.value.trim(),
+      button_label: ssoButtonLabel.value.trim(),
+      match_email: ssoMatchEmail.checked,
+      require_verified_email: ssoRequireVerified.checked,
+      allow_signup: ssoAllowSignup.checked,
+    };
+    if (ssoClientSecret.value.trim()) body.client_secret = ssoClientSecret.value.trim();
+    try {
+      const v = fillSso(await rootApi('/admin/sso', { method: 'PUT', body: JSON.stringify(body) }));
+      ssoStatus.textContent = v.enabled
+        ? '✅ Saved — the sign-on button is on the login screen.'
+        : '✅ Saved — fill in issuer, client ID and secret to switch sign-on on.';
+    } catch (err) {
+      ssoStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      ssoSaveBtn.disabled = false;
+    }
+  });
+
+  ssoTestBtn.addEventListener('click', async () => {
+    ssoStatus.textContent = '⏳ Contacting the identity provider…';
+    try {
+      const r = await rootApi('/admin/sso/test', { method: 'POST' });
+      ssoStatus.textContent = `✅ Reached ${r.issuer} (save first if you changed the issuer).`;
+    } catch (err) {
+      ssoStatus.textContent = `⚠️ ${err.message}`;
     }
   });
 
@@ -2112,10 +2359,30 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
       const meta = document.createElement('span');
       meta.className = 'dest-meta';
       const wheels = `${u.wheel_count} wheel${u.wheel_count === 1 ? '' : 's'}`;
-      meta.textContent = u.sharing_with.length
-        ? `${wheels} · shares with ${u.sharing_with.join(', ')}`
-        : wheels;
+      const bits = [u.email ? `✉️ ${u.email}` : '✉️ no e-mail', wheels];
+      if (u.sso_linked) bits.push('🔗 SSO');
+      if (!u.has_password) bits.push('no password');
+      if (u.sharing_with.length) bits.push(`shares with ${u.sharing_with.join(', ')}`);
+      meta.textContent = bits.join(' · ');
       li.append(name, meta);
+
+      // E-mail first: it's what matches an account to its sign-on identity
+      li.append(adminActionBtn('✉️ E-mail', 'Set or change this account\'s e-mail address', () => {
+        const email = prompt(`E-mail address for ${u.name} (leave empty to remove it).\n`
+          + 'They can log in with it, and it links their account the first time they use single sign-on.',
+        u.email || '');
+        if (email === null) return;
+        adminAction(rootApi(`/admin/users/${u.id}/email`, {
+          method: 'PUT',
+          body: JSON.stringify({ email: email.trim() }),
+        }));
+      }));
+      if (u.sso_linked) {
+        li.append(adminActionBtn('Unlink SSO', 'Detach this account from its sign-on identity', () => {
+          if (!confirm(`Unlink ${u.name} from single sign-on? Their next sign-on matches by e-mail again.`)) return;
+          adminAction(rootApi(`/admin/users/${u.id}/unlink-sso`, { method: 'POST' }));
+        }));
+      }
 
       if (u.id !== me.user.id) {
         li.append(adminActionBtn(
@@ -3358,9 +3625,15 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
 
   // ── Init ──────────────────────────────────────────────────────────
   loadVersion();
-  if (token) {
-    fetchMe();
+  if (ssoResult && ssoResult !== 'linked') {
+    finishSso(ssoResult);
+  } else if (token) {
+    fetchMe().then(() => {
+      // back from linking single sign-on (or failing to) — show the outcome
+      if (me && (ssoResult === 'linked' || ssoError)) openAccount(ssoError ? '' : '✅ Single sign-on linked', ssoError);
+    });
   } else {
+    if (ssoError) authError.textContent = `⚠️ ${ssoError}`;
     showView('auth');
     if (inviteCode) {
       document.querySelector('.auth-tabs .tab[data-mode="register"]').click();
@@ -3368,6 +3641,7 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
         ? `🎟️ You've been invited to Wheel of Choice — create your account below.`
         : `🎟️ You've been invited to a shared wheel (code ${inviteCode}) — create an account and you'll join it automatically.`;
       inviteBanner.hidden = false;
+      rootApi('/config').then((c) => showSsoButton(c.sso)).catch(() => {});
     } else {
       applyRegistrationGate();
     }
@@ -3381,7 +3655,9 @@ import { prefersReducedMotion, prettyDate, fmtHour, formatDateTime } from './uti
   async function applyRegistrationGate() {
     let open = true;
     try {
-      open = (await rootApi('/config')).registration_open;
+      const config = await rootApi('/config');
+      open = config.registration_open;
+      showSsoButton(config.sso);
     } catch { return; }
     const registerTab = document.querySelector('.auth-tabs .tab[data-mode="register"]');
     if (registerTab) registerTab.hidden = !open;

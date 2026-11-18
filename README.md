@@ -19,9 +19,14 @@ full-size.
 
 ## Features
 
-- **Accounts** 👤 — registering takes ten seconds: a name and a password,
-  nothing else. Your wheels, favourites and filter preferences are saved
-  to your account.
+- **Accounts** 👤 — registering takes ten seconds: a name, a password
+  and (optionally) an e-mail address. Log in with either your name or your
+  e-mail. Your wheels, favourites and filter preferences are saved to your
+  account; the 🔑 button manages your e-mail, password and sign-on link.
+- **Single sign-on** 🔐 (optional) — log in through an OpenID Connect
+  provider such as **Authentik**, next to (not instead of) passwords.
+  Existing accounts are matched by e-mail address on their first
+  sign-on. See [Single sign-on](#-single-sign-on-optional) below.
 - **Wheels, plural** 🎡 — every wheel is its own little world: its own
   entries, its own spin history, its own share code. A user can hold any
   number of wheels (shown as tabs; ➕ creates or joins another one), and
@@ -127,7 +132,8 @@ full-size.
   app — without the app store.
 - **Admin** 🛠️ — the first account ever registered runs the place: it can
   make other users admin, pull someone out of every wheel they share,
-  reset a locked-out user's password, delete accounts, download or
+  reset a locked-out user's password, set an account's e-mail address,
+  unlink single sign-on, delete accounts, download or
   restore a full backup of the database, and trigger a server self-update
   (see below). It also controls **who can sign up**: leave registration
   **open** (anyone can create an account) or switch it to **invite-only**
@@ -533,6 +539,92 @@ have.
 - *The 🔍 button opens Google Maps in a new tab instead of showing a list*
   — no key is configured on this server (that's the built-in fallback);
   add one in the admin panel to get inline results.
+
+## 🔐 Single sign-on (optional)
+
+Wheel of Choice can let people log in through an **OpenID Connect**
+identity provider. It's written and tested against **Authentik**, but any
+standards-compliant provider (Keycloak, Authelia, Zitadel, …) works the
+same way. Password log-in keeps working alongside it. No extra Python
+packages are needed.
+
+### 1. Give existing accounts their e-mail address
+
+The first time someone signs on, they're matched to the local account
+with **the same e-mail address** as their identity at the provider — from
+then on the link is permanent (it's stored against the provider's stable
+user id, so a later e-mail change at either side doesn't break it). So
+before switching SSO on, make sure every existing account has its e-mail
+address: users can add it themselves under **🔑 → E-mail address**, or an
+admin can set it under **🛠️ Admin → ✉️ E-mail** next to each account.
+
+Someone whose e-mail differs between the two can log in with their
+password and use **🔑 → Single sign-on → Link** to attach their provider
+identity by hand.
+
+### 2. Create the provider in Authentik
+
+In Authentik: **Applications → Providers → Create → OAuth2/OpenID
+Provider**:
+
+- **Client type**: *Confidential*.
+- **Redirect URIs**: the address shown in **🛠️ Admin → Single sign-on**
+  as *Redirect URI* — `https://<your-app>/api/auth/oidc/callback`.
+- **Scopes**: the defaults (`openid`, `email`, `profile`) are what's used.
+- Then create an **Application** that uses this provider (and bind the
+  users/groups who may use it, if you want to restrict it).
+
+Note the provider's **Client ID**, **Client Secret** and **OpenID
+Configuration Issuer** (looks like
+`https://auth.example.com/application/o/<app-slug>/`).
+
+### 3. Turn it on
+
+Open **🛠️ Admin → Single sign-on**, paste the issuer, client ID and
+secret, and save. **Test connection** checks the issuer can be reached.
+The login screen now shows a **🔐 Log in with …** button (the text is
+yours to choose). Behind a reverse proxy, fill in **Public URL** (e.g.
+`https://wheel.example.com`) so the redirect URI uses your public
+address instead of the internal one.
+
+The same settings can come from environment variables instead (handy in
+`docker-compose.yml`); values saved in the admin panel take precedence:
+`WHEEL_OIDC_ISSUER`, `WHEEL_OIDC_CLIENT_ID`, `WHEEL_OIDC_CLIENT_SECRET`
+and `WHEEL_PUBLIC_URL`.
+
+### How accounts are matched
+
+1. An account already **linked** to this identity → logged straight in.
+2. **Match by e-mail** (on by default): the account with the same
+   e-mail address gets linked and logged in. By default only when the
+   provider marks the address as verified (`email_verified`); if yours
+   doesn't send that and you trust its addresses, untick **Only verified
+   e-mail**.
+3. Otherwise a **new account** is created — only where a password
+   sign-up would be allowed too (registration open, or an invite link was
+   followed), or when **New accounts via SSO** is ticked. Its name comes
+   from the provider's username. Such accounts have no password; they can
+   set one under 🔑 if they like.
+
+An admin can **Unlink SSO** on any account (e.g. after a mismatch); its
+next sign-on matches by e-mail again. Logging out of the app doesn't log
+you out of the provider.
+
+### Troubleshooting
+
+- *“the provider calls itself … — put exactly that in the issuer field”*
+  — copy the issuer from Authentik verbatim, trailing slash included.
+- *“an account with … exists, but the identity provider doesn't vouch that
+  the address is verified”* — the provider sent `email_verified: false`.
+  Either mark e-mails verified in the provider, untick **Only verified
+  e-mail**, or have the user link by hand from 🔑.
+- *“this sign-in was started in another browser”* — the round trip has to
+  finish in the browser that started it (it's bound by a short-lived
+  cookie); on iOS, an installed Home Screen app and Safari count as two
+  browsers. Start again from the same place.
+- *Authentik says the redirect URI is invalid* — the URI in Authentik must
+  match the one in the admin panel exactly; set **Public URL** if the
+  admin panel shows an internal address or `http://`.
 
 ## Seed data & sources
 

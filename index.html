@@ -24,7 +24,7 @@
       <button type="button" class="btn btn-ghost btn-small" id="notify-btn" title="Notifications" hidden>🔔</button>
       <button type="button" class="btn btn-ghost btn-small" id="calendar-btn" title="My calendars" hidden>📆</button>
       <button type="button" class="btn btn-ghost btn-small" id="share-btn" hidden>🔗 Share</button>
-      <button type="button" class="btn btn-ghost btn-small" id="password-btn" title="Change password" hidden>🔑</button>
+      <button type="button" class="btn btn-ghost btn-small" id="password-btn" title="Account: e-mail, sign-on & password" hidden>🔑</button>
       <button type="button" class="btn btn-ghost btn-small" id="logout-btn">Log out</button>
     </div>
     <h1>🎡 Wheel of Choice</h1>
@@ -44,9 +44,13 @@
       </nav>
       <p class="invite-banner" id="invite-banner" role="status" hidden></p>
       <form id="auth-form" class="auth-form">
-        <label>Your name
-          <input type="text" id="auth-name" autocomplete="username" maxlength="30" required
-                 placeholder="e.g. Bob">
+        <label><span id="auth-name-label">Name or e-mail</span>
+          <input type="text" id="auth-name" autocomplete="username" maxlength="254" required
+                 placeholder="Your name or e-mail address">
+        </label>
+        <label id="auth-email-row" hidden>E-mail <span class="label-optional">(optional)</span>
+          <input type="email" id="auth-email" autocomplete="email" maxlength="254"
+                 placeholder="you@example.com">
         </label>
         <label>Password
           <input type="password" id="auth-password" autocomplete="current-password" minlength="1" required
@@ -55,8 +59,12 @@
         <button type="submit" class="btn btn-primary" id="auth-submit">Log in</button>
         <p class="form-error" id="auth-error" role="alert"></p>
       </form>
+      <div class="sso-block" id="sso-block" hidden>
+        <p class="sso-divider"><span>or</span></p>
+        <button type="button" class="btn btn-ghost sso-btn" id="sso-btn">🔐 Log in with SSO</button>
+      </div>
       <p class="gate-hint" id="auth-hint">
-        New here? Creating an account takes ten seconds — just a name and a password.
+        New here? Creating an account takes ten seconds — a name, a password and (if you like) your e-mail address.
         Your wheels, favourites and preferences are saved to it, and every wheel can be
         shared with exactly the people you want on it.
       </p>
@@ -460,16 +468,43 @@
     <p class="form-error" id="calendar-error" role="alert"></p>
   </dialog>
 
-  <!-- ── Change-password modal ──────────────────────────────────────── -->
+  <!-- ── Account modal (e-mail, single sign-on, password) ─────────────── -->
   <dialog id="password-modal" class="modal share-modal">
     <div class="manage-header">
-      <h2>🔑 Change password</h2>
+      <h2>🔑 Your account</h2>
       <button type="button" class="btn btn-ghost" id="close-password-btn">Close</button>
     </div>
-    <p class="manage-hint">Pick a new password for your account. You'll stay logged in
+    <h3>E-mail address</h3>
+    <p class="manage-hint">You can log in with it instead of your name. It's also how your
+      account is recognised the first time you use single sign-on, if this server has it.</p>
+    <form id="email-form" class="auth-form">
+      <label>E-mail
+        <input type="email" id="account-email" autocomplete="email" maxlength="254"
+               placeholder="you@example.com">
+      </label>
+      <label id="email-password-row">Current password
+        <input type="password" id="email-password" autocomplete="current-password"
+               placeholder="To confirm it's you">
+      </label>
+      <button type="submit" class="btn btn-primary" id="email-submit">Save e-mail</button>
+      <p class="push-state" id="email-state" role="status"></p>
+      <p class="form-error" id="email-error" role="alert"></p>
+    </form>
+    <div id="account-sso" hidden>
+      <h3>Single sign-on</h3>
+      <p class="manage-hint" id="account-sso-status"></p>
+      <div class="form-actions">
+        <button type="button" class="btn btn-ghost" id="account-sso-link">🔗 Link sign-on</button>
+        <button type="button" class="btn btn-ghost" id="account-sso-unlink" hidden>Unlink</button>
+      </div>
+      <p class="push-state" id="account-sso-state" role="status"></p>
+      <p class="form-error" id="account-sso-error" role="alert"></p>
+    </div>
+    <h3>Password</h3>
+    <p class="manage-hint" id="password-hint">Pick a new password for your account. You'll stay logged in
       on this device; other devices keep their session too.</p>
     <form id="password-form" class="auth-form">
-      <label>Current password
+      <label id="password-current-row">Current password
         <input type="password" id="password-current" autocomplete="current-password" required
                placeholder="Your current password">
       </label>
@@ -517,6 +552,71 @@
       <button type="button" class="btn btn-ghost" id="create-invite-btn">➕ Create invite link</button>
     </div>
     <p class="update-status" id="registration-status" role="status"></p>
+    <h3>Single sign-on (OpenID Connect)</h3>
+    <p class="manage-hint">Let people log in through an identity provider such as
+      <strong>Authentik</strong>. Create an OAuth2/OpenID provider there (client type
+      <em>confidential</em>), add the redirect URI below, and paste the issuer, client ID and
+      secret here. The first time someone signs on, they're matched to the existing account
+      with the same e-mail address — so give accounts their e-mail address first (✉️ above).
+      Password log-in keeps working alongside.</p>
+    <div class="admin-settings">
+      <label class="admin-setting">
+        <span class="admin-setting-label">🏢 Issuer URL</span>
+        <span class="admin-setting-field">
+          <input type="text" id="sso-issuer" class="input-wide" autocomplete="off" spellcheck="false"
+                 placeholder="https://auth.example.com/application/o/wheel/">
+        </span>
+        <span class="admin-setting-hint">Authentik shows it on the provider page as "OpenID Configuration Issuer".</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🆔 Client ID</span>
+        <span class="admin-setting-field">
+          <input type="text" id="sso-client-id" class="input-wide" autocomplete="off" spellcheck="false">
+        </span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🔑 Client secret</span>
+        <span class="admin-setting-field">
+          <input type="password" id="sso-client-secret" class="input-wide" autocomplete="new-password" spellcheck="false">
+        </span>
+        <span class="admin-setting-hint" id="sso-secret-hint">Stored on the server, never shown again. Leave empty to keep the current one.</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🌐 Public URL</span>
+        <span class="admin-setting-field">
+          <input type="text" id="sso-public-url" class="input-wide" autocomplete="off" spellcheck="false"
+                 placeholder="https://wheel.example.com">
+        </span>
+        <span class="admin-setting-hint">The address people use to reach this app. Needed behind a reverse proxy; leave empty to use the address of this request.</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🏷️ Button text</span>
+        <span class="admin-setting-field">
+          <input type="text" id="sso-button-label" maxlength="40" placeholder="Log in with SSO">
+        </span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">✉️ Match by e-mail</span>
+        <span class="admin-setting-field"><input type="checkbox" id="sso-match-email"></span>
+        <span class="admin-setting-hint">On a first sign-on, link the account whose e-mail address equals the provider's.</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">✅ Only verified e-mail</span>
+        <span class="admin-setting-field"><input type="checkbox" id="sso-require-verified"></span>
+        <span class="admin-setting-hint">Only match when the provider marks the address as verified (<code>email_verified</code>). Turn off if your provider doesn't send it and you trust the addresses in it.</span>
+      </label>
+      <label class="admin-setting">
+        <span class="admin-setting-label">🆕 New accounts via SSO</span>
+        <span class="admin-setting-field"><input type="checkbox" id="sso-allow-signup"></span>
+        <span class="admin-setting-hint">Let people without an account here get one by signing on — even when registration is invite-only.</span>
+      </label>
+      <p class="manage-hint">Redirect URI for the provider: <code id="sso-redirect-uri">—</code></p>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary btn-small" id="sso-save-btn">Save sign-on settings</button>
+        <button type="button" class="btn btn-ghost btn-small" id="sso-test-btn">Test connection</button>
+      </div>
+      <p class="update-status" id="sso-status" role="status"></p>
+    </div>
     <h3>Date polls</h3>
     <p class="manage-hint">Tune the restaurant date polls for everyone on this server.
       Changes apply to new and in-progress polls straight away.</p>
