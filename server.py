@@ -50,13 +50,30 @@ import os
 from wheelapp import app  # importing the package registers every route
 
 
-if __name__ == "__main__":
+def serve():
+    """Run the server: waitress (a production-grade, pure-Python WSGI
+    server) when it's installed, else Flask's built-in development server
+    — fine for trying things out, not meant to face the internet.
+    WHEEL_DEV_SERVER=1 forces the development server (auto-reload-free,
+    but with Flask's debugging-friendly error output)."""
     from wheelapp import backup
     backup.start_backup_worker()  # daily backups into data/backups/
-    # HOST/PORT default to the same 0.0.0.0:8000 as before; overriding them
-    # via the environment is what lets the container (and reverse proxies)
-    # place the app wherever they like without editing this file.
-    app.run(
-        host=os.environ.get("HOST", "0.0.0.0"),
-        port=int(os.environ.get("PORT", "8000")),
-    )
+    # HOST/PORT default to 0.0.0.0:8000; overriding them via the
+    # environment lets the container (and reverse proxies) place the app
+    # wherever they like without editing this file.
+    host = os.environ.get("HOST", "0.0.0.0")
+    port = int(os.environ.get("PORT", "8000"))
+    try:
+        from waitress import serve as waitress_serve
+    except ImportError:
+        waitress_serve = None
+    if waitress_serve and os.environ.get("WHEEL_DEV_SERVER") != "1":
+        print(f"Wheel of Choice on http://{host}:{port} (waitress)", flush=True)
+        waitress_serve(app, host=host, port=port, threads=8, ident="wheel-of-choice")
+    else:
+        print("waitress isn't installed — using Flask's development server", flush=True)
+        app.run(host=host, port=port)
+
+
+if __name__ == "__main__":
+    serve()
