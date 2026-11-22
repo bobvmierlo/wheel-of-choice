@@ -38,6 +38,9 @@ full-size.
   - 🍽️ **Restaurants** — a fully custom list: no seeding, you add every
     spot yourself, and **no vetoes** — where the wheel lands is where
     you eat.
+  - 🎯 **Anything else** — a blank wheel for whatever you can't decide
+    on: films, board games, who does the dishes. Like a restaurant
+    wheel, minus the location and the date polls.
 - **Onboarding per travel wheel** 🧭 — creating a holidays or city-trips
   wheel asks a few quick questions (where's home, how far you'll roam,
   what you love on a trip, budget style, and which places you're already
@@ -91,20 +94,41 @@ full-size.
   date is locked — see [Restaurant location
   search](#-restaurant-location-search-optional). Without a key it stays a
   plain address field (and the 🔍 button just opens a Maps search).
+  Restaurant and custom entries can carry **tags** (*pizza*, *takeaway*,
+  *2 players*); pick tags in the side panel to only spin those — each
+  member keeps their own tag filter. **📋 Add several at once** takes a
+  pasted list, one per line (a leading emoji becomes the icon). A name
+  that's already on the wheel isn't added twice. Deleting an entry shows
+  an **↩️ Undo** for a few seconds. And **⬇️ Download this wheel** saves
+  its entries and history as JSON — no admin needed.
+- **Wheel settings** 🔗 — in the share screen any member can **rename**
+  the wheel, **swap in a new share code** (the old code and invite link
+  stop working at once), see who's on it and **take someone off** (or
+  withdraw an invitation that's still waiting), and move the wheel's
+  tab left or right.
 - **Veto & respin** 🙅 (travel wheels) — every member gets exactly one
   veto per round (tracked on the server, so no sneaky double vetoes),
   and a spin one member accepts waits for the others' thumbs-up: their
   devices show the pick with an accept-or-veto banner, and with three or
   four members it only counts once *everyone* who can still veto has
   okayed it. A round closes when a pick makes it into the history.
-  Restaurant wheels skip all of this: the wheel's word is final and the
+  While a pick waits, nobody else can spin over it, and the spinner can
+  **↩️ take it back**. If the last person it waits for drops out some
+  other way — vetoes something else, leaves, or is taken off the wheel —
+  the pick counts as accepted instead of waiting forever. Other members'
+  devices pick up every change (new entries, stars, edits) within a few
+  seconds.
+  Restaurant and custom wheels skip all of this: the wheel's word is final and the
   pick goes straight into the history.
 - **Spin history & trip status** 📖 — accepted picks are saved
   (including who spun them) so you can look back. On travel wheels each
-  pick can be marked 📅 *Booked* or ✅ *Been there* (with an optional
-  trip date) from its info view; marking a pick "been there" takes the
+  pick can be marked 📅 *Booked* or ✅ *Been there* (with optional trip
+  dates) from its info view; marking a pick "been there" takes the
   destination off the wheel automatically, so you don't spin Rome again
-  next year — turning the history into a little travel log.
+  next year — un-mark it and it's back on. A single pick can be removed
+  with its ✕ (with undo), and the history — up to 500 picks — can be
+  downloaded as a **CSV** spreadsheet or a **calendar** (.ics) of every
+  dated pick.
 - **Entry info & links** 📍 — every entry can carry notes and links.
   Click a pick in the spin history (or a name in the manage panel) to
   see its tags, your notes, and clickable links (seeded destinations
@@ -112,10 +136,12 @@ full-size.
   planning searches — ✈️ flights and 🛏️ stays for travel wheels, 📍 a
   maps lookup for restaurants; the spin result shows the notes and links
   too, so you can start planning right away.
-- **Date polls** 🗳️ (restaurant wheels) — once the wheel picks *where*,
-  settle *when*: open the pick and start a Doodle-style poll, everyone
-  ticks the evenings they can make, and any evening you all agree on
-  locks in with a tap (then drops into your calendar as an .ics or
+- **Date polls** 🗳️ (restaurant and travel wheels) — once the wheel
+  picks *where*, settle *when*: open the pick and start a Doodle-style
+  poll, everyone ticks the evenings they can make, and any evening you
+  all agree on locks in with a tap. On a travel wheel you put up start
+  dates for a trip of so many nights (up to a year ahead); the locked
+  one fills in the pick's trip dates (then drops into your calendar as an .ics or
   Google link). Optionally link your own calendar by its secret iCal
   address — no Google account or app needed — and the date grid marks
   the evenings you're already busy, just for you. Setup in

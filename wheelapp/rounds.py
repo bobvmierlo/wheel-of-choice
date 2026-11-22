@@ -54,7 +54,58 @@ def round_payload(db, user, wheel):
         "vetoes_used": len(rnd["vetoes"]),
         "members": len(accounts.wheel_member_users(db, wheel["id"])),
         "pending": pending,
+        # bumped on every change to the wheel — tells polling devices to
+        # re-fetch entries and history (see storage._bump_wheel_revs)
+        "rev": wheel.get("rev", 0),
     }
+
+
+def settle_round(db, wheel):
+    """Finalize the pending pick once nobody is left who could still stop
+    it. Normally the last thumbs-up does that, but the last holdout can
+    also drop out another way — veto something else, leave the wheel, be
+    removed — and then the pick would otherwise wait forever. Returns the
+    pick that was finalized (the caller saves and pings), or None."""
+    rnd = round_data(wheel)
+    pending = rnd["pending"]
+    if not pending or pending_blockers(db, wheel, rnd):
+        return None
+    finalize_pick(wheel, pending["dest_id"], pending["name"], pending["flag"], pending["by_name"])
+    return pending
+
+
+def announce_settled(db, wheel, pick, skip_id=None):
+    """Push the "it's decided" news for a pick settle_round finalized."""
+    push.push_to_users(
+        [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != skip_id],
+        i18n.msg('🎉 {flag} {dest} it is!', flag=pick['flag'], dest=pick['name']),
+        i18n.msg("Everyone's in on {wheel} — time to book! 🧳", wheel=wheel['name']),
+        wheel,
+    )
+
+
+def settle_wheels(db, wheel_ids):
+    """settle_round for each of these wheels (after members left or were
+    removed); saves and pings when anything was decided."""
+    settled = []
+    for wid in wheel_ids:
+        wheel = db["wheels"].get(wid)
+        if wheel is not None and storage.is_travel(wheel):
+            pick = settle_round(db, wheel)
+            if pick:
+                settled.append((wheel, pick))
+    if settled:
+        storage.save_db(db)
+        for wheel, pick in settled:
+            announce_settled(db, wheel, pick)
+
+
+def final_body(wheel, user_name):
+    if storage.is_travel(wheel):
+        return i18n.msg('{user} spun {wheel} — time to book! 🧳', user=user_name, wheel=wheel['name'])
+    if storage.is_food(wheel):
+        return i18n.msg('{user} spun {wheel} — enjoy your meal! 🍽️', user=user_name, wheel=wheel['name'])
+    return i18n.msg('{user} spun {wheel} — the wheel has spoken! 🎯', user=user_name, wheel=wheel['name'])
 
 
 def finalize_pick(wheel, dest_id, name, flag, by_name):
@@ -95,9 +146,17 @@ def veto_destination(wheel_id):
             abort(404, description="destination not found")
         rnd["vetoes"][user["id"]] = dest_id
         shot_down = rnd["pending"] if rnd["pending"] and rnd["pending"]["dest_id"] == dest_id else None
+        settled = None
         if shot_down:
             rnd["pending"] = None  # the veto shoots down the waiting pick
+        else:
+            # vetoing something else spends this member's say on the
+            # waiting pick too — if they were the last holdout, it's decided
+            settled = settle_round(db, wheel)
         storage.save_db(db)
+        if settled:
+            announce_settled(db, wheel, settled, skip_id=user["id"])
+            return jsonify({**round_payload(db, user, wheel), "settled": True})
         if shot_down:
             push.push_to_users(
                 [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
@@ -125,6 +184,12 @@ def propose_pick(wheel_id):
         if dest is None:
             abort(404, description="destination not found")
         if storage.is_travel(wheel):
+            waiting = rnd["pending"]
+            if waiting and waiting["by"] != user["id"]:
+                # replacing it would silently wipe the others' thumbs-up
+                abort(409, description=i18n.msg(
+                    "{name}'s pick {flag} {dest} is still waiting — okay or veto it first",
+                    name=waiting["by_name"], flag=waiting["flag"], dest=waiting["name"]))
             if dest_id in rnd["vetoes"].values():
                 abort(409, description="that destination was vetoed this round")
             can_still_veto = any(
@@ -154,8 +219,7 @@ def propose_pick(wheel_id):
         push.push_to_users(
             [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
             i18n.msg('🎉 {flag} {dest} it is!', flag=dest['flag'], dest=dest['name']),
-            i18n.msg('{user} spun {wheel} — time to book! 🧳', user=user['name'], wheel=wheel['name']) if storage.is_travel(wheel)
-            else i18n.msg('{user} spun {wheel} — enjoy your meal! 🍽️', user=user['name'], wheel=wheel['name']),
+            final_body(wheel, user['name']),
             wheel,
         )
         return jsonify({
@@ -209,3 +273,28 @@ def confirm_pick(wheel_id):
             "history": polls.history_view(db, wheel, user),
             "round": round_payload(db, user, wheel),
         })
+
+
+@app.delete("/api/wheels/<wheel_id>/round/pending")
+def withdraw_pick(wheel_id):
+    """The spinner takes back their waiting pick — e.g. they accepted it
+    by mistake. Nobody's veto is spent; the round carries on."""
+    with _lock:
+        db = storage.load_db()
+        user = accounts.current_user(db)
+        wheel = validation.get_wheel(db, user, wheel_id)
+        rnd = round_data(wheel)
+        pending = rnd["pending"]
+        if not pending:
+            abort(404, description="no pick is waiting for a thumbs-up")
+        if pending["by"] != user["id"]:
+            abort(403, description="only whoever spun it can take it back")
+        rnd["pending"] = None
+        storage.save_db(db)
+        push.push_to_users(
+            [u for u in accounts.wheel_member_users(db, wheel["id"]) if u["id"] != user["id"]],
+            i18n.msg('↩️ {user} took back {flag} {dest}', user=user['name'], flag=pending['flag'], dest=pending['name']),
+            i18n.msg('{wheel}: nothing to okay for now — spin again!', wheel=wheel['name']),
+            wheel,
+        )
+        return jsonify(round_payload(db, user, wheel))

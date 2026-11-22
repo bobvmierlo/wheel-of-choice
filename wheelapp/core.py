@@ -77,6 +77,8 @@ WHEEL_TYPES = {
     "holidays": {"label": "Holidays", "travel": True, "seed": ROOT / "seed-destinations.json"},
     "citytrips": {"label": "City trips", "travel": True, "seed": ROOT / "seed-citytrips.json"},
     "restaurants": {"label": "Restaurants", "travel": False, "seed": None},
+    # a blank wheel for anything else — films, games night, who cooks
+    "custom": {"label": "Anything", "travel": False, "seed": None},
 }
 TRAVEL_TYPES = [t for t, meta in WHEEL_TYPES.items() if meta["travel"]]
 
@@ -95,7 +97,9 @@ ROAM_DISTANCES = {
 }
 BUDGET_STYLES = BUDGETS | {"mix"}
 
-HISTORY_LIMIT = 50
+HISTORY_LIMIT = 500
+MAX_TAGS = 8  # free-form tags per entry on a restaurant or custom wheel
+MAX_BULK_ADD = 100  # entries one paste can add at once
 MAX_SEED_FAVORITES = 8  # per wheel, when onboarding picks favourites
 HISTORY_STATUSES = {"booked", "visited"}  # a pick's life after the spin
 SESSION_TTL_DAYS = 90  # log-ins older than this expire
@@ -104,6 +108,8 @@ SESSION_TTL_DAYS = 90  # log-ins older than this expire
 # evening. A poll lives on the history entry, so it syncs, dies and clears
 # with the entry. The evening window is what "busy" means for a dinner.
 POLL_MAX_DATES = 10  # candidate dates a proposer may put up
+POLL_MAX_NIGHTS = 30  # longest trip a travel-wheel date poll can propose
+TRIP_POLL_HORIZON_DAYS = 365  # trips are planned further ahead than dinners
 
 # Three knobs are admin-tunable at runtime (Admin → Date polls), stored in
 # the db under "settings": the timezone busy evenings are judged in, the
