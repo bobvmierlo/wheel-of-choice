@@ -103,6 +103,7 @@
           <button type="button" class="seg-btn active" data-value="holidays">🌍 Holidays</button>
           <button type="button" class="seg-btn" data-value="citytrips">🏙️ City trips</button>
           <button type="button" class="seg-btn" data-value="restaurants">🍽️ Restaurants</button>
+          <button type="button" class="seg-btn" data-value="custom">🎯 Anything else</button>
         </div>
       </fieldset>
 
@@ -168,6 +169,9 @@
       <p class="gate-hint" id="restaurant-hint" hidden>🍽️ A restaurant wheel starts empty:
         you add your own favourite spots by hand, and there are no vetoes — where it
         lands is where you eat.</p>
+      <p class="gate-hint" id="custom-hint" hidden>🎯 A blank wheel for anything you can't
+        decide on — films, board games, who does the dishes. Add your own entries, tag them
+        if you like, and there are no vetoes: the wheel has the last word.</p>
 
       <button type="button" class="btn btn-primary" id="onboard-submit">Create this wheel 🎡</button>
       <p class="form-error" id="onboard-error" role="alert"></p>
@@ -262,6 +266,11 @@
         </div>
       </fieldset>
 
+      <fieldset class="tag-filter" id="tag-filter" hidden>
+        <legend>🏷️ Tags</legend>
+        <div class="segmented" id="tag-filter-chips"></div>
+      </fieldset>
+
       <p class="match-count" id="match-count"></p>
       <button type="button" class="btn btn-ghost" id="manage-btn">⚙️ Manage the wheel</button>
     </aside>
@@ -274,6 +283,7 @@
           <button type="button" class="btn btn-primary btn-small" id="pending-accept-btn">Count me in! 🎉</button>
           <button type="button" class="btn btn-ghost btn-small" id="pending-veto-btn">Veto 🙅</button>
         </div>
+        <button type="button" class="linklike" id="pending-withdraw-btn" hidden>↩️ Take my pick back</button>
       </div>
       <div class="wheel-wrap">
         <div class="pointer" aria-hidden="true"></div>
@@ -287,6 +297,10 @@
     <aside class="panel history-panel" aria-label="Spin history">
       <h2>📖 Our spin history</h2>
       <ul id="history-list" class="history-list"></ul>
+      <div class="history-export" id="history-export" hidden>
+        <button type="button" class="btn btn-ghost btn-small" id="export-csv-btn" title="The history as a spreadsheet">⬇️ CSV</button>
+        <button type="button" class="btn btn-ghost btn-small" id="export-ics-btn" title="Every dated pick as calendar events">📆 Calendar</button>
+      </div>
       <button type="button" class="btn btn-ghost" id="clear-history-btn" hidden>Clear history</button>
     </aside>
 
@@ -320,9 +334,9 @@
     <p class="result-tags" id="info-tags"></p>
     <p class="info-location" id="info-location" hidden></p>
     <p class="info-notes" id="info-notes" hidden></p>
-    <h3>🔗 Read more</h3>
+    <h3 id="info-links-title">🔗 Read more</h3>
     <ul class="link-list" id="info-links"></ul>
-    <h3>🧭 Plan it</h3>
+    <h3 id="info-plan-title">🧭 Plan it</h3>
     <ul class="link-list plan-links" id="info-plan"></ul>
     <div class="info-status" id="info-status" hidden>
       <h3>🧳 Trip status</h3>
@@ -331,12 +345,15 @@
         <button type="button" class="seg-btn" data-status="booked">📅 Booked</button>
         <button type="button" class="seg-btn" data-status="visited">✅ Been there</button>
       </div>
-      <label class="trip-date-row">Trip date: <input type="date" id="trip-date"></label>
-      <p class="manage-hint">Marking a pick “✅ Been there” takes it off the wheel
-        (re-tick it in ⚙️ Manage the wheel to bring it back).</p>
+      <div class="trip-date-row">
+        <label>Trip date: <input type="date" id="trip-date"></label>
+        <label>until <input type="date" id="trip-end"></label>
+      </div>
+      <p class="manage-hint">Marking a pick “✅ Been there” takes it off the wheel —
+        un-mark it and it's back on.</p>
     </div>
     <div class="info-poll" id="info-poll" hidden>
-      <h3>🗳️ When are we going?</h3>
+      <h3 id="info-poll-title">🗳️ When are we going?</h3>
       <p class="info-poll-summary" id="info-poll-summary"></p>
       <div class="info-poll-actions" id="info-poll-actions"></div>
     </div>
@@ -374,6 +391,24 @@
     </div>
     <p class="share-pending" id="share-pending" hidden></p>
     <p class="share-members" id="share-members"></p>
+
+    <h3>👥 Who's on it</h3>
+    <ul class="member-list" id="member-list"></ul>
+
+    <h3>⚙️ Wheel settings</h3>
+    <form class="rename-row" id="rename-form">
+      <input type="text" id="rename-input" maxlength="40" required aria-label="Wheel name">
+      <button type="submit" class="btn btn-ghost btn-small">💾 Rename</button>
+    </form>
+    <div class="settings-row">
+      <button type="button" class="btn btn-ghost btn-small" id="renew-code-btn">🔄 New share code</button>
+      <span class="manage-hint">The old code and invite link stop working; everyone on the wheel stays.</span>
+    </div>
+    <div class="settings-row" id="tab-order-row">
+      <span class="manage-hint">Tab position:</span>
+      <button type="button" class="btn btn-ghost btn-small" id="tab-left-btn">◀ Move left</button>
+      <button type="button" class="btn btn-ghost btn-small" id="tab-right-btn">Move right ▶</button>
+    </div>
     <p class="form-error" id="share-error" role="alert"></p>
     <p class="share-leave-row">
       <button type="button" class="linklike" id="leave-btn">Leave this wheel…</button>
@@ -430,6 +465,8 @@
         <span class="date-grid-month" id="date-month" aria-live="polite"></span>
         <button type="button" class="btn btn-ghost btn-small" id="date-next-btn" aria-label="Next month">›</button>
       </div>
+      <label class="poll-nights" id="poll-nights-row" hidden>🧳 Trip length:
+        <input type="number" id="poll-nights" min="1" max="30" value="3"> nights</label>
       <div class="date-grid-head" aria-hidden="true">
         <span>Mon</span><span>Tue</span><span>Wed</span><span>Thu</span>
         <span>Fri</span><span>Sat</span><span>Sun</span>
@@ -755,6 +792,8 @@
           <option value="longhaul">Long-haul</option>
         </select>
       </div>
+      <input type="text" id="add-tags" class="list-only" maxlength="200"
+             placeholder="Tags, comma-separated — e.g. pizza, takeaway">
       <div class="location-block food-only">
         <div class="location-row">
           <input type="text" id="add-location" maxlength="200"
@@ -799,7 +838,19 @@
         <button type="submit" class="btn btn-primary" id="form-submit">➕ Add it</button>
         <button type="button" class="btn btn-ghost" id="cancel-edit-btn" hidden>Cancel</button>
       </div>
+      <p class="form-error" id="add-error" role="alert"></p>
     </form>
+
+    <details class="bulk-add" id="bulk-add">
+      <summary>📋 Add several at once</summary>
+      <p class="manage-hint">One per line — start a line with an emoji to use it as the icon.
+        Names already on the wheel are skipped.</p>
+      <textarea id="bulk-lines" rows="5" placeholder="🍕 Luigi's&#10;🍣 Sushi Bar&#10;Taco Town"></textarea>
+      <div class="form-actions">
+        <button type="button" class="btn btn-primary" id="bulk-add-btn">➕ Add them all</button>
+      </div>
+      <p class="manage-hint" id="bulk-status" role="status"></p>
+    </details>
 
     <div class="catalog-sync travel-only">
       <button type="button" class="btn btn-ghost" id="sync-catalog-btn">🌍 Add new places from the catalogue</button>
@@ -814,7 +865,16 @@
       info &amp; links, ✏️ edit or ✕ delete it. The star is <em>yours</em>: ⭐ starred entries get a
       double-width segment, and every extra star from another member 🌟 widens it further.</p>
     <ul id="dest-list" class="dest-list"></ul>
+    <p class="share-leave-row">
+      <button type="button" class="btn btn-ghost btn-small" id="export-wheel-btn">⬇️ Download this wheel (JSON)</button>
+    </p>
   </dialog>
+
+  <!-- ── Undo toast (deleting an entry or a pick) ───────────────────── -->
+  <div class="undo-toast" id="undo-toast" role="status" aria-live="polite" hidden>
+    <span id="undo-text"></span>
+    <button type="button" class="btn btn-ghost btn-small" id="undo-btn">↩️ Undo</button>
+  </div>
 
   <!-- ── Install / notifications nudge ────────────────────────────────
        Two flavours, one toast (see maybePromotePwa in app.js):

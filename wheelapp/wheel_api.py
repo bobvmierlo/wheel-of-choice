@@ -13,7 +13,7 @@ from .core import (
     _lock,
     app,
 )
-from . import i18n, accounts, push, seeding, storage
+from . import i18n, accounts, push, rounds, seeding, storage, validation
 
 
 # ── Wheels (create / join / leave / claim) ───────────────────────────
@@ -113,6 +113,94 @@ def leave_wheel(wheel_id):
         user["wheels"].remove(wheel_id)
         user.get("prefs", {}).pop(wheel_id, None)
         accounts.drop_wheel_if_empty(db, wheel_id)
+        storage.save_db(db)
+        # if the leaver was the last one a waiting pick needed, it's decided
+        rounds.settle_wheels(db, [wheel_id])
+        return jsonify(accounts.me_payload(db, user))
+
+
+# ── Wheel settings (rename / new code / members / tab order) ─────────
+@app.put("/api/wheels/<wheel_id>")
+def rename_wheel(wheel_id):
+    """Rename a wheel — for everyone on it, like every other wheel edit."""
+    payload = request.get_json(force=True, silent=True) or {}
+    name = " ".join(str(payload.get("name", "")).split())[:40]
+    if not name:
+        abort(400, description="give the wheel a name")
+    with _lock:
+        db = storage.load_db()
+        user = accounts.current_user(db)
+        wheel = validation.get_wheel(db, user, wheel_id)
+        wheel["name"] = name
+        storage.save_db(db)
+        return jsonify(accounts.me_payload(db, user))
+
+
+@app.post("/api/wheels/<wheel_id>/code")
+def renew_code(wheel_id):
+    """Swap the wheel's share code for a fresh one. The old code and every
+    invite link built from it stop working at once; members stay on."""
+    with _lock:
+        db = storage.load_db()
+        user = accounts.current_user(db)
+        wheel = validation.get_wheel(db, user, wheel_id)
+        taken = {w["code"] for w in db["wheels"].values()}
+        taken |= set(db.get("invites") or {})  # admin account-invite codes
+        code = storage.new_invite_code()
+        while code in taken:
+            code = storage.new_invite_code()
+        wheel["code"] = code
+        storage.save_db(db)
+        return jsonify(accounts.me_payload(db, user))
+
+
+@app.post("/api/wheels/<wheel_id>/members/<member_id>/remove")
+def remove_member(wheel_id, member_id):
+    """Take someone off this one wheel — or withdraw an invitation that's
+    still waiting for them. Any member may (the same household trust as
+    clearing the history); the removed person keeps their other wheels."""
+    with _lock:
+        db = storage.load_db()
+        user = accounts.current_user(db)
+        wheel = validation.get_wheel(db, user, wheel_id)
+        if member_id == user["id"]:
+            abort(400, description="to take yourself off, leave the wheel instead")
+        target = db["users"].get(member_id)
+        if target is None:
+            abort(404, description="no such person on this wheel")
+        invites = target.get("invites", [])
+        if wheel_id in target.get("wheels", []):
+            target["wheels"].remove(wheel_id)
+            target.get("prefs", {}).pop(wheel_id, None)
+            storage.save_db(db)
+            push.push_to_users(
+                [target],
+                i18n.msg('👋 {user} took you off {wheel}', user=user['name'], wheel=wheel['name']),
+                "Ask them for the code if that was a mistake.",
+                wheel,
+                tag=f"{wheel_id}-removed",
+                url="/",
+            )
+            rounds.settle_wheels(db, [wheel_id])
+        elif any(i["wheel_id"] == wheel_id for i in invites):
+            target["invites"] = [i for i in invites if i["wheel_id"] != wheel_id]
+            storage.save_db(db)
+        else:
+            abort(404, description="no such person on this wheel")
+        return jsonify(accounts.me_payload(db, user))
+
+
+@app.put("/api/me/wheel-order")
+def reorder_wheels():
+    """Put the wheel tabs in the order given — a reshuffle of your own list."""
+    order = (request.get_json(force=True, silent=True) or {}).get("order")
+    with _lock:
+        db = storage.load_db()
+        user = accounts.current_user(db)
+        mine = user.get("wheels", [])
+        if not isinstance(order, list) or sorted(map(str, order)) != sorted(mine):
+            abort(400, description="send every one of your wheels, in the new order")
+        user["wheels"] = [str(w) for w in order]
         storage.save_db(db)
         return jsonify(accounts.me_payload(db, user))
 

@@ -14,7 +14,7 @@ from .core import (
     clean_timezone,
     settings_view,
 )
-from . import i18n, accounts, calendars, oidc, storage
+from . import i18n, accounts, calendars, oidc, rounds, storage
 
 
 # ── Admin ────────────────────────────────────────────────────────────
@@ -324,6 +324,7 @@ def admin_unshare(user_id):
         for wid in shared:
             target.get("prefs", {}).pop(wid, None)
         storage.save_db(db)
+        rounds.settle_wheels(db, shared)  # a waiting pick may only have needed them
         return jsonify(admin_user_list(db))
 
 
@@ -341,4 +342,5 @@ def admin_delete_user(user_id):
         for wid in target.get("wheels", []):
             accounts.drop_wheel_if_empty(db, wid)
         storage.save_db(db)
+        rounds.settle_wheels(db, target.get("wheels", []))
         return jsonify(admin_user_list(db))

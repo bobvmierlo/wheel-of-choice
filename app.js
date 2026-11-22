@@ -10,9 +10,10 @@
  */
 import {
   VIBE_LABELS, BUDGET_LABELS, DISTANCE_LABELS, MULTI_FILTERS,
-  WHEEL_TYPE_META, SEGMENT_COLORS, TOKEN_KEY,
+  WHEEL_TYPE_META, SEGMENT_COLORS, TOKEN_KEY, TRAVEL_TYPES,
 } from './constants.js';
 import { prefersReducedMotion, prettyDate, fmtHour } from './utils.js';
+import { actionBtn } from './ui.js';
 import {
   t, tn, initI18n, currentLanguage, availableLanguages, setLanguage,
 } from './i18n.js';
@@ -78,6 +79,7 @@ await initI18n();
     // an accepted pick waits for the others' thumbs-up before it lands
     // in the history. Restaurant wheels have no vetoes at all.
     round: emptyRound(),
+    rev: null, // the wheel's revision — a change means "fetch it again"
     editingId: null,
   };
 
@@ -86,7 +88,7 @@ await initI18n();
   }
 
   function defaultFilters() {
-    return { budget: [], distance: [], party: 'couple', vibe: [], season: [] };
+    return { budget: [], distance: [], party: 'couple', vibe: [], season: [], tags: [] };
   }
 
   function currentWheel() {
@@ -98,13 +100,23 @@ await initI18n();
   }
 
   function isTravelWheel(wheel = currentWheel()) {
-    return !wheel || wheel.type !== 'restaurants';
+    return !wheel || TRAVEL_TYPES.includes(wheel.type);
+  }
+
+  // Restaurant wheels add a location per entry and dinner-style polls.
+  function isFoodWheel(wheel = currentWheel()) {
+    return !!wheel && wheel.type === 'restaurants';
+  }
+
+  // A custom ("anything") wheel picks things that need no date.
+  function hasPolls(wheel = currentWheel()) {
+    return !!wheel && wheel.type !== 'custom';
   }
 
   function loadFilters() {
     state.filters = defaultFilters();
     const saved = (me && me.prefs && me.prefs[wheelId]) || {};
-    for (const key of MULTI_FILTERS) {
+    for (const key of [...MULTI_FILTERS, 'tags']) {
       if (Array.isArray(saved[key])) state.filters[key] = [...saved[key]];
     }
     if (saved.party === 'couple' || saved.party === 'group') state.filters.party = saved.party;
@@ -112,8 +124,12 @@ await initI18n();
 
   let prefsTimer = null;
   function saveFilters() {
-    if (!me || !isTravelWheel()) return; // restaurant wheels have no filters
-    me.prefs[wheelId] = JSON.parse(JSON.stringify(state.filters));
+    if (!me) return;
+    const f = state.filters;
+    // travel wheels filter on the trip preferences, the others on tags
+    me.prefs[wheelId] = isTravelWheel()
+      ? { budget: [...f.budget], distance: [...f.distance], party: f.party, vibe: [...f.vibe], season: [...f.season] }
+      : { tags: [...f.tags] };
     clearTimeout(prefsTimer);
     prefsTimer = setTimeout(() => {
       rootApi('/me/prefs', { method: 'PUT', body: JSON.stringify(me.prefs) }).catch(console.error);
@@ -142,9 +158,9 @@ await initI18n();
   }
 
   function finalMessage(pick) {
-    return isTravelWheel()
-      ? t(`{flag} {name} it is — time to book! 🧳`, { flag: pick.flag, name: pick.name })
-      : t(`{flag} {name} it is — enjoy your meal! 🍽️`, { flag: pick.flag, name: pick.name });
+    if (isTravelWheel()) return t(`{flag} {name} it is — time to book! 🧳`, { flag: pick.flag, name: pick.name });
+    if (isFoodWheel()) return t(`{flag} {name} it is — enjoy your meal! 🍽️`, { flag: pick.flag, name: pick.name });
+    return t(`{flag} {name} it is — the wheel has spoken! 🎯`, { flag: pick.flag, name: pick.name });
   }
 
   // ── Language menu ─────────────────────────────────────────────────
@@ -175,7 +191,9 @@ await initI18n();
     if (!res.ok) {
       let message = '';
       try { message = (await res.json()).error; } catch { /* not JSON */ }
-      throw new Error(message || t(`Server said {status} for {path}`, { status: res.status, path }));
+      const err = new Error(message || t(`Server said {status} for {path}`, { status: res.status, path }));
+      err.status = res.status;
+      throw err;
     }
     return res.status === 204 ? null : res.json();
   }
@@ -189,15 +207,17 @@ await initI18n();
       const [destinations, history, round] = await Promise.all([
         api('/destinations'), api('/history'), api('/round'),
       ]);
-      state.destinations = destinations;
-      state.history = history;
+      state.destinations = withoutPendingDeletes('dest', destinations);
+      state.history = withoutPendingDeletes('history', history);
       state.round = round;
+      state.rev = round.rev;
       wheelHint.textContent = '';
     } catch (err) {
       console.error(err);
       state.destinations = [];
       state.history = [];
       state.round = emptyRound();
+      state.rev = null;
       wheelHint.textContent = t('⚠️ Cannot reach the server — is it running? (python3 server.py)');
     }
     renderHistory();
@@ -217,11 +237,27 @@ await initI18n();
     openDestInfo(entry);
   }
 
+  // Every tag used on the wheel's entries, alphabetically.
+  function wheelTags() {
+    const all = new Set();
+    for (const d of state.destinations) (d.tags || []).forEach((tag) => all.add(tag));
+    return [...all].sort((a, b) => a.localeCompare(b));
+  }
+
+  // The selected tags that still exist — a tag nobody uses any more
+  // mustn't silently empty the wheel.
+  function activeTags() {
+    const existing = new Set(wheelTags());
+    return state.filters.tags.filter((tag) => existing.has(tag));
+  }
+
   function eligibleDestinations() {
     const f = state.filters;
     if (!isTravelWheel()) {
-      // restaurants: no filters, no vetoes — everything ticked is on
-      return state.destinations.filter((d) => d.enabled);
+      // restaurants & custom: no vetoes, only the tag filter
+      const tags = activeTags();
+      return state.destinations.filter((d) =>
+        d.enabled && (tags.length === 0 || (d.tags || []).some((tag) => tags.includes(tag))));
     }
     return state.destinations.filter((d) =>
       d.enabled &&
@@ -346,6 +382,13 @@ await initI18n();
 
   const historyList = document.getElementById('history-list');
   const clearHistoryBtn = document.getElementById('clear-history-btn');
+  const historyExport = document.getElementById('history-export');
+  const tagFilter = document.getElementById('tag-filter');
+  const tagFilterChips = document.getElementById('tag-filter-chips');
+  const addTagsInput = document.getElementById('add-tags');
+  const addError = document.getElementById('add-error');
+  const pendingWithdrawBtn = document.getElementById('pending-withdraw-btn');
+  const tripEnd = document.getElementById('trip-end');
 
   function setActive(btn, on) {
     btn.classList.toggle('active', on);
@@ -488,15 +531,18 @@ await initI18n();
   function syncWheelChrome() {
     const wheel = currentWheel();
     const travel = isTravelWheel(wheel);
+    const food = isFoodWheel(wheel);
     document.querySelectorAll('.filter-group').forEach((g) => { g.hidden = !travel; });
-    filtersTitle.textContent = travel ? t('Trip preferences') : t('🍽️ Restaurant wheel');
+    filtersTitle.textContent = travel ? t('Trip preferences')
+      : (food ? t('🍽️ Restaurant wheel') : t('🎯 Your wheel'));
     resultKicker.textContent = t(wheelMeta(wheel).kicker);
     vetoBtn.hidden = !travel;
     vetoNote.hidden = !travel;
     document.querySelectorAll('#manage-modal .travel-only').forEach((el) => { el.hidden = !travel; });
-    document.querySelectorAll('#manage-modal .food-only').forEach((el) => { el.hidden = travel; });
-    addNameInput.placeholder = travel ? t('Destination name') : t('Restaurant name');
-    addFlagInput.placeholder = travel ? t('Emoji, e.g. 🏝️') : t('Emoji, e.g. 🍕');
+    document.querySelectorAll('#manage-modal .food-only').forEach((el) => { el.hidden = !food; });
+    document.querySelectorAll('#manage-modal .list-only').forEach((el) => { el.hidden = travel; });
+    addNameInput.placeholder = travel ? t('Destination name') : (food ? t('Restaurant name') : t('Entry name'));
+    addFlagInput.placeholder = travel ? t('Emoji, e.g. 🏝️') : (food ? t('Emoji, e.g. 🍕') : t('Emoji, e.g. 🎬'));
   }
 
   // ── Auth form ─────────────────────────────────────────────────────
@@ -676,11 +722,13 @@ await initI18n();
   });
 
   function syncTypeUI() {
-    const travel = onboardAnswers.type !== 'restaurants';
+    const travel = TRAVEL_TYPES.includes(onboardAnswers.type);
     travelQuestions.hidden = !travel;
-    restaurantHint.hidden = travel;
-    const example = { holidays: t('Holidays'), citytrips: t('City trips') }[onboardAnswers.type]
-      || t('Friday night dinners');
+    restaurantHint.hidden = onboardAnswers.type !== 'restaurants';
+    document.getElementById('custom-hint').hidden = onboardAnswers.type !== 'custom';
+    const example = {
+      holidays: t('Holidays'), citytrips: t('City trips'), custom: t('Films to watch'),
+    }[onboardAnswers.type] || t('Friday night dinners');
     wheelNameInput.placeholder = t('e.g. {name}', { name: example });
     if (travel) renderFavList();
   }
@@ -752,7 +800,7 @@ await initI18n();
   });
 
   onboardSubmit.addEventListener('click', async () => {
-    const travel = onboardAnswers.type !== 'restaurants';
+    const travel = TRAVEL_TYPES.includes(onboardAnswers.type);
     if (travel && !onboardAnswers.home) {
       onboardError.textContent = t('⚠️ Tell us where home is first 🙂');
       return;
@@ -966,17 +1014,119 @@ await initI18n();
     shareWheelName.textContent = `${wheelMeta(wheel).icon} ${wheel.name}`;
     shareCode.textContent = wheel.code;
     shareLink.textContent = inviteLink(wheel);
-    const others = wheel.members.filter((n) => n !== me.user.name);
-    shareMembers.textContent = others.length
-      ? t('On this wheel: {names} 💑', { names: wheel.members.join(', ') })
-      : t('Nobody else is on this wheel yet — send the code!');
+    renderShareSettings(wheel);
     shareError.textContent = '';
     copyCodeBtn.textContent = t('📋 Copy');
     copyLinkBtn.textContent = t('📋 Copy');
-    renderSharePending(wheel);
     renderSharePeople(wheel);
     shareModal.showModal();
   });
+
+  // ── Wheel settings (members, rename, new code, tab order) ─────────
+  const memberList = document.getElementById('member-list');
+  const renameForm = document.getElementById('rename-form');
+  const renameInput = document.getElementById('rename-input');
+  const renewCodeBtn = document.getElementById('renew-code-btn');
+  const tabLeftBtn = document.getElementById('tab-left-btn');
+  const tabRightBtn = document.getElementById('tab-right-btn');
+
+  // Everything in the share modal that depends on the wheel's summary —
+  // re-run after any change that hands back a fresh `me`.
+  function renderShareSettings(wheel) {
+    shareWheelName.textContent = `${wheelMeta(wheel).icon} ${wheel.name}`;
+    shareCode.textContent = wheel.code;
+    shareLink.textContent = inviteLink(wheel);
+    const others = wheel.members.filter((n) => n !== me.user.name);
+    shareMembers.textContent = others.length
+      ? ''
+      : t('Nobody else is on this wheel yet — send the code!');
+    shareMembers.hidden = !!others.length;
+    renderSharePending(wheel);
+    renderMemberList(wheel);
+    if (document.activeElement !== renameInput) renameInput.value = wheel.name;
+    const i = me.wheels.findIndex((w) => w.id === wheel.id);
+    document.getElementById('tab-order-row').hidden = me.wheels.length < 2;
+    tabLeftBtn.disabled = i <= 0;
+    tabRightBtn.disabled = i === -1 || i >= me.wheels.length - 1;
+  }
+
+  function renderMemberList(wheel) {
+    memberList.innerHTML = '';
+    const people = [
+      ...(wheel.member_list || []).map((m) => ({ ...m, pending: false })),
+      ...(wheel.pending_list || []).map((m) => ({ ...m, pending: true })),
+    ];
+    for (const person of people) {
+      const li = document.createElement('li');
+      const name = document.createElement('span');
+      name.textContent = person.id === me.user.id ? t('{name} (you)', { name: person.name }) : person.name;
+      if (person.pending) {
+        const note = document.createElement('span');
+        note.className = 'member-note';
+        note.textContent = ` · ${t('invited, not accepted yet')}`;
+        name.append(note);
+      }
+      li.append(name);
+      if (person.id !== me.user.id) {
+        li.append(actionBtn(
+          person.pending ? t('Withdraw') : t('Remove'),
+          person.pending ? t('Withdraw the invitation') : t('Take them off this wheel'),
+          () => removeMember(wheel, person),
+        ));
+      }
+      memberList.append(li);
+    }
+  }
+
+  async function removeMember(wheel, person) {
+    if (!person.pending && !confirm(t('Take {name} off {wheel}? They keep their other wheels and can rejoin with a code.', { name: person.name, wheel: wheel.name }))) return;
+    await updateWheelSettings(() => rootApi(`/wheels/${wheel.id}/members/${person.id}/remove`, { method: 'POST' }));
+  }
+
+  // Run a settings call that answers with a fresh `me`, then redraw.
+  async function updateWheelSettings(call) {
+    shareError.textContent = '';
+    try {
+      me = { ...(await call()), prefs: me.prefs };
+      renderTabs();
+      const wheel = currentWheel();
+      if (wheel) renderShareSettings(wheel);
+      return true;
+    } catch (err) {
+      shareError.textContent = `⚠️ ${err.message}`;
+      return false;
+    }
+  }
+
+  renameForm.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    const wheel = currentWheel();
+    const name = renameInput.value.trim();
+    if (!wheel || !name) return;
+    renameInput.blur();
+    await updateWheelSettings(() => rootApi(`/wheels/${wheel.id}`, { method: 'PUT', body: JSON.stringify({ name }) }));
+  });
+
+  renewCodeBtn.addEventListener('click', async () => {
+    const wheel = currentWheel();
+    if (!wheel) return;
+    if (!confirm(t('Make a new share code? The current code and invite link stop working right away.'))) return;
+    if (await updateWheelSettings(() => rootApi(`/wheels/${wheel.id}/code`, { method: 'POST' }))) {
+      copyCodeBtn.textContent = t('📋 Copy');
+      copyLinkBtn.textContent = t('📋 Copy');
+    }
+  });
+
+  function moveTab(delta) {
+    const ids = me.wheels.map((w) => w.id);
+    const i = ids.indexOf(wheelId);
+    const j = i + delta;
+    if (i === -1 || j < 0 || j >= ids.length) return;
+    [ids[i], ids[j]] = [ids[j], ids[i]];
+    updateWheelSettings(() => rootApi('/me/wheel-order', { method: 'PUT', body: JSON.stringify({ order: ids }) }));
+  }
+  tabLeftBtn.addEventListener('click', () => moveTab(-1));
+  tabRightBtn.addEventListener('click', () => moveTab(1));
   closeShareBtn.addEventListener('click', () => shareModal.close());
 
   // People already invited but not yet accepted — shown so the sharer
@@ -1038,7 +1188,7 @@ await initI18n();
       });
       const n = me.invited || 0;
       const fresh = me.wheels.find((w) => w.id === wheel.id) || wheel;
-      renderSharePending(fresh);      // now shows them under "waiting to accept"
+      renderShareSettings(fresh);     // now shows them under "waiting to accept"
       await renderSharePeople(fresh); // and drops them from the pick list
       shareInviteBtn.textContent = n
         ? tn(n, '✅ Shared with 1 person', '✅ Shared with {n} people')
@@ -1391,11 +1541,14 @@ await initI18n();
   const pollFoot = document.getElementById('poll-foot');
   const pollScrapBtn = document.getElementById('poll-scrap-btn');
   const pollError = document.getElementById('poll-error');
+  const pollNightsRow = document.getElementById('poll-nights-row');
+  const pollNights = document.getElementById('poll-nights');
 
   // Both refreshed from the server (admin-configurable) whenever a poll's
   // availability loads — see loadPollAvailability. The defaults only stand
   // in for the moment before that first fetch returns.
   let pollHorizonDays = 60;  // how far ahead a poll can reach
+  const TRIP_POLL_HORIZON_DAYS = 365;  // mirrors the server's limit for trip polls
   let pollEveningFrom = 17;  // local hour an evening counts as busy
 
   let pollEntryId = null;
@@ -1447,16 +1600,70 @@ await initI18n();
     ].join('\r\n');
   }
 
-  function downloadIcs(name, dateStr, location) {
-    const blob = new Blob([icsForPick(name, dateStr, location)], { type: 'text/calendar' });
+  // A trip: an all-day event from the start day up to (not including)
+  // the day after it ends — DTEND is exclusive for all-day events.
+  function icsForTrip(name, start, end) {
+    const uid = `wheel-trip-${start}-${Math.random().toString(36).slice(2)}@wheel-of-choice`;
+    return [
+      'BEGIN:VCALENDAR', 'VERSION:2.0', 'PRODID:-//Wheel of Choice//EN', 'BEGIN:VEVENT',
+      `UID:${uid}`, `DTSTART;VALUE=DATE:${start.replace(/-/g, '')}`,
+      `DTEND;VALUE=DATE:${addDays(end || start, 1).replace(/-/g, '')}`,
+      `SUMMARY:${icsEscape('🧳 ' + name)}`,
+      'END:VEVENT', 'END:VCALENDAR',
+    ].join('\r\n');
+  }
+
+  function addDays(iso, n) {
+    const [y, m, d] = iso.split('-').map(Number);
+    return isoLocal(new Date(y, m - 1, d + n));
+  }
+
+  function saveBlob(blob, filename) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `dinner-${name.replace(/[^\w]+/g, '-').toLowerCase()}.ics`;
+    a.download = filename;
     document.body.append(a);
     a.click();
     a.remove();
     setTimeout(() => URL.revokeObjectURL(url), 1000);
+  }
+
+  function downloadIcs(name, dateStr, location) {
+    saveBlob(new Blob([icsForPick(name, dateStr, location)], { type: 'text/calendar' }),
+      `dinner-${name.replace(/[^\w]+/g, '-').toLowerCase()}.ics`);
+  }
+
+  function downloadTripIcs(name, start, end) {
+    saveBlob(new Blob([icsForTrip(name, start, end)], { type: 'text/calendar' }),
+      `trip-${name.replace(/[^\w]+/g, '-').toLowerCase()}.ics`);
+  }
+
+  function googleTripUrl(name, start, end) {
+    return 'https://calendar.google.com/calendar/render?action=TEMPLATE'
+      + `&text=${encodeURIComponent('🧳 ' + name)}`
+      + `&dates=${start.replace(/-/g, '')}/${addDays(end || start, 1).replace(/-/g, '')}`
+      + `&details=${encodeURIComponent('Locked in with Wheel of Choice')}`;
+  }
+
+  // A travel poll's option: its start date and the day you travel home.
+  function tripRange(start, nights) {
+    return t('{start} → {end}', { start: prettyDate(start), end: prettyDate(addDays(start, nights)) });
+  }
+
+  // "Busy" for a trip: any evening of it your calendar says is taken.
+  function tripAvail(start, nights) {
+    let any = false;
+    for (let i = 0; i < nights; i++) {
+      const st = pollAvail[addDays(start, i)];
+      if (st === 'busy') return 'busy';
+      if (st === 'free') any = true;
+    }
+    return any ? 'free' : undefined;
+  }
+
+  function pollIsTrip(poll) {
+    return !!(poll && poll.nights);
   }
 
   function googleCalUrl(name, dateStr, location) {
@@ -1471,18 +1678,38 @@ await initI18n();
   // ── Info-modal poll section ───────────────────────────────────────
   function renderInfoPoll() {
     const entry = infoEntry;
-    if (!entry || isTravelWheel()) { infoPoll.hidden = true; return; }
+    if (!entry || !hasPolls()) { infoPoll.hidden = true; return; }
     infoPoll.hidden = false;
+    const travel = isTravelWheel();
     const poll = entry.poll;
     infoPollActions.innerHTML = '';
     if (!poll) {
-      infoPollSummary.textContent = t("Great pick — now find an evening you're all free 🗳️");
+      infoPollSummary.textContent = travel
+        ? t("Find dates that work for everyone — put a few up and let them vote 🗳️")
+        : t("Great pick — now find an evening you're all free 🗳️");
       const b = document.createElement('button');
       b.type = 'button';
       b.className = 'btn btn-primary btn-small';
       b.textContent = t('📅 Start a date poll');
       b.addEventListener('click', () => openPollModal(entry, 'propose'));
       infoPollActions.append(b);
+    } else if (poll.status === 'locked' && pollIsTrip(poll)) {
+      const end = addDays(poll.locked_date, poll.nights);
+      infoPollSummary.textContent = t(`🗓️ {dates} — it's in the diary!`, { dates: tripRange(poll.locked_date, poll.nights) });
+      ghostBtn(infoPollActions, t('⬇️ Add to calendar (.ics)'), () => downloadTripIcs(entry.name, poll.locked_date, end));
+      const g = document.createElement('a');
+      g.className = 'btn btn-ghost btn-small';
+      g.href = googleTripUrl(entry.name, poll.locked_date, end);
+      g.target = '_blank';
+      g.rel = 'noopener noreferrer';
+      g.textContent = t('📆 Google Calendar');
+      infoPollActions.append(g);
+      const scrap = document.createElement('button');
+      scrap.type = 'button';
+      scrap.className = 'linklike';
+      scrap.textContent = t('Scrap the date & poll again…');
+      scrap.addEventListener('click', () => { pollEntryId = entry.id; scrapPoll(); });
+      infoPollActions.append(scrap);
     } else if (poll.status === 'locked') {
       infoPollSummary.textContent = t(`🗓️ {date} — it's a date!`, { date: prettyDate(poll.locked_date) });
       // the entry only carries name + flag; the address lives on the
@@ -1505,7 +1732,9 @@ await initI18n();
       infoPollActions.append(scrap);
     } else {
       const voted = poll.votes.length;
-      infoPollSummary.textContent = t(`{count} evenings up · {voted} of {members} voted`, { count: poll.dates.length, voted, members: poll.members })
+      infoPollSummary.textContent = (pollIsTrip(poll)
+        ? t(`{count} start dates up · {voted} of {members} voted`, { count: poll.dates.length, voted, members: poll.members })
+        : t(`{count} evenings up · {voted} of {members} voted`, { count: poll.dates.length, voted, members: poll.members }))
         + (poll.waiting_names.length ? ` · ${t('waiting for {names}', { names: poll.waiting_names.join(' & ') })}` : '');
       const b = document.createElement('button');
       b.type = 'button';
@@ -1556,7 +1785,7 @@ await initI18n();
     const poll = entry.poll;
     pollTitle.textContent = mode !== 'propose' && poll
       ? (poll.status === 'locked' ? t("🗓️ It's a date") : t('🗳️ When can everyone make it?'))
-      : t('🗳️ Find an evening');
+      : (isTravelWheel() ? t('🗳️ Find dates for the trip') : t('🗳️ Find an evening'));
     pollSub.textContent = `${entry.flag} ${entry.name}`;
     pollPropose.hidden = true;
     pollVoteView.hidden = true;
@@ -1583,7 +1812,7 @@ await initI18n();
     dateGrid.innerHTML = '';
     const today = new Date(); today.setHours(0, 0, 0, 0);
     const todayIso = isoLocal(today);
-    const horizon = new Date(today); horizon.setDate(today.getDate() + pollHorizonDays);
+    const horizon = new Date(today); horizon.setDate(today.getDate() + currentPollHorizon());
     const horizonIso = isoLocal(horizon);
     if (!pollViewMonth) pollViewMonth = monthStart(today);
 
@@ -1624,6 +1853,11 @@ await initI18n();
     dateNextBtn.disabled = new Date(first.getFullYear(), first.getMonth() + 1, 1) > horizon;
   }
 
+  // Trips are planned further ahead than dinners.
+  function currentPollHorizon() {
+    return isTravelWheel() ? Math.max(pollHorizonDays, TRIP_POLL_HORIZON_DAYS) : pollHorizonDays;
+  }
+
   function shiftPollMonth(delta) {
     const base = pollViewMonth || monthStart(new Date());
     pollViewMonth = new Date(base.getFullYear(), base.getMonth() + delta, 1);
@@ -1632,13 +1866,22 @@ await initI18n();
 
   function syncCreateBtn() {
     pollCreateBtn.disabled = pollSelected.size < 2;
+    if (isTravelWheel()) {
+      pollCreateBtn.textContent = pollSelected.size < 2
+        ? t('Pick at least two start dates') : t(`📅 Put {size} start dates up`, { size: pollSelected.size });
+      return;
+    }
     pollCreateBtn.textContent = pollSelected.size < 2
       ? t('Pick at least two evenings') : t(`📅 Put {size} evenings up`, { size: pollSelected.size });
   }
 
   function showPollPropose(entry) {
-    pollTitle.textContent = t('🗳️ Find an evening');
-    pollSub.textContent = t(`Pick the evenings that could work for {flag} {name}, then put them to the group.`, { flag: entry.flag, name: entry.name });
+    const travel = isTravelWheel();
+    pollTitle.textContent = travel ? t('🗳️ Find dates for the trip') : t('🗳️ Find an evening');
+    pollSub.textContent = travel
+      ? t(`Pick a trip length and a few start dates for {flag} {name}, then put them to the group.`, { flag: entry.flag, name: entry.name })
+      : t(`Pick the evenings that could work for {flag} {name}, then put them to the group.`, { flag: entry.flag, name: entry.name });
+    pollNightsRow.hidden = !travel;
     pollSelected = new Set();
     pollViewMonth = null;  // always open on the current month
     setPollLegend(pollLegend);
@@ -1670,8 +1913,8 @@ await initI18n();
       main.className = 'poll-row-main';
       const dl = document.createElement('div');
       dl.className = 'poll-row-date';
-      dl.textContent = prettyDate(date);
-      const st = pollAvail[date];
+      dl.textContent = pollIsTrip(poll) ? tripRange(date, poll.nights) : prettyDate(date);
+      const st = pollIsTrip(poll) ? tripAvail(date, poll.nights) : pollAvail[date];
       if (st === 'busy' || st === 'free') {
         const dot = document.createElement('span');
         dot.className = `cal-dot ${st}`;
@@ -1729,6 +1972,7 @@ await initI18n();
       const updated = state.history.find((e) => e.id === infoEntry.id);
       if (updated) infoEntry = updated;
       renderInfoPoll();
+      if (isTravelWheel()) syncStatusControls();  // a locked trip fills in its dates
     }
     if (pollModal.open && pollPropose.hidden) {  // don't disturb an in-progress proposal
       const entry = currentPollEntry();
@@ -1779,8 +2023,10 @@ await initI18n();
     pollError.textContent = '';
     pollCreateBtn.disabled = true;
     try {
+      const body = { dates };
+      if (isTravelWheel()) body.nights = Number(pollNights.value) || 0;
       const res = await api(`/history/${pollEntryId}/poll`, {
-        method: 'POST', body: JSON.stringify({ dates }),
+        method: 'POST', body: JSON.stringify(body),
       });
       syncPollFromHistory(res.history);
       const entry = currentPollEntry();
@@ -1801,7 +2047,11 @@ await initI18n();
   function reflectPollUpdates() {
     if (infoEntry) {
       const updated = state.history.find((e) => e.id === infoEntry.id);
-      if (updated) { infoEntry = updated; renderInfoPoll(); }
+      if (updated) {
+        infoEntry = updated;
+        renderInfoPoll();
+        if (isTravelWheel()) syncStatusControls();
+      }
     }
     if (pollModal.open && pollPropose.hidden) {
       const entry = currentPollEntry();
@@ -1883,7 +2133,9 @@ await initI18n();
       ctx.textBaseline = 'middle';
       const empty = isTravelWheel()
         ? [t('No destinations match'), t('— loosen the filters!')]
-        : [t('Nothing on the wheel yet'), t('— add some restaurants!')];
+        : (state.destinations.some((d) => d.enabled) && activeTags().length
+          ? [t('Nothing has those tags'), t('— pick another tag!')]
+          : [t('Nothing on the wheel yet'), isFoodWheel() ? t('— add some restaurants!') : t('— add some entries!')]);
       ctx.fillText(empty[0], cx, cy - size * 0.03);
       ctx.fillText(empty[1], cx, cy + size * 0.03);
       return;
@@ -1965,6 +2217,11 @@ await initI18n();
 
   function spin() {
     if (spinning || currentSegments.length === 0) return;
+    if (blockedByPending()) {
+      const p = state.round.pending;
+      wheelHint.textContent = t(`{by_name}'s pick {flag} {name} is still waiting — okay or veto it first.`, { by_name: p.by_name, flag: p.flag, name: p.name });
+      return;
+    }
     if (currentSegments.length === 1) {
       // Only one option left — no suspense needed.
       showResult(currentSegments[0]);
@@ -2045,6 +2302,7 @@ await initI18n();
   // open once a pick is made. Zero data to maintain. Restaurants get a
   // maps search instead of flights, sharpened by the address if one is set.
   function planLinks(name, location) {
+    if (!isTravelWheel() && !isFoodWheel()) return [];
     if (!isTravelWheel()) {
       return [
         { label: t('📍 Find it on Maps'), url: mapsSearchUrl(name, location) },
@@ -2058,8 +2316,8 @@ await initI18n();
 
   // The restaurant's address as a tappable maps link, or nothing.
   function setLocationLine(el, d) {
-    const place = (d && !isTravelWheel() && d.place) || null;
-    const loc = (place && place.address) || (d && !isTravelWheel() && d.location) || '';
+    const place = (d && isFoodWheel() && d.place) || null;
+    const loc = (place && place.address) || (d && isFoodWheel() && d.location) || '';
     el.hidden = !loc;
     el.innerHTML = '';
     if (!loc) return;
@@ -2092,8 +2350,12 @@ await initI18n();
     const notes = d && d.notes;
     infoNotes.hidden = !notes;
     infoNotes.textContent = notes || '';
-    renderLinkList(infoLinks, d ? destLinks(d) : fallbackLinks(name));
-    renderLinkList(infoPlan, planLinks(name, destLocation(d)));
+    const links = d ? destLinks(d) : fallbackLinks(name);
+    const plan = planLinks(name, destLocation(d));
+    renderLinkList(infoLinks, links);
+    renderLinkList(infoPlan, plan);
+    document.getElementById('info-links-title').hidden = !links.length;
+    document.getElementById('info-plan-title').hidden = !plan.length;
     infoStatus.hidden = !infoEntry || !isTravelWheel();
     if (infoEntry && isTravelWheel()) syncStatusControls();
     renderInfoPoll();  // restaurant history entries get the date-poll section
@@ -2125,6 +2387,9 @@ await initI18n();
       setActive(btn, (infoEntry.status || '') === btn.dataset.status);
     });
     tripDate.value = infoEntry.trip_date || '';
+    tripEnd.value = infoEntry.trip_end || '';
+    tripEnd.min = infoEntry.trip_date || '';
+    tripEnd.disabled = !infoEntry.trip_date;
   }
 
   async function updateHistoryEntry(changes) {
@@ -2137,7 +2402,7 @@ await initI18n();
     if (updated) infoEntry = updated;
     renderHistory();
     if (res.destination) {
-      // marking "been there" took it off the wheel
+      // marking "been there" took it off the wheel (or un-marking put it back)
       const i = state.destinations.findIndex((d) => d.id === res.destination.id);
       if (i !== -1) state.destinations[i] = res.destination;
       refresh();
@@ -2154,17 +2419,30 @@ await initI18n();
     });
   });
 
-  tripDate.addEventListener('change', () => {
+  function saveTripDates(changes) {
     if (!infoEntry) return;
-    updateHistoryEntry({ trip_date: tripDate.value }).catch(console.error);
+    updateHistoryEntry(changes).catch((err) => {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
+      syncStatusControls();
+    });
+  }
+
+  tripDate.addEventListener('change', () => {
+    const changes = { trip_date: tripDate.value };
+    // an end before the new start (or with no start at all) goes
+    if (!tripDate.value || (tripEnd.value && tripEnd.value < tripDate.value)) changes.trip_end = '';
+    saveTripDates(changes);
   });
+  tripEnd.addEventListener('change', () => saveTripDates({ trip_end: tripEnd.value }));
 
   // ── Result modal ──────────────────────────────────────────────────
   function describe(d) {
     if (!isTravelWheel()) {
-      return starCount(d) >= 2
+      const star = starCount(d) >= 2
         ? t(`🌟 starred by {count} of you`, { count: starCount(d) })
         : (isFavorite(d) ? t('⭐ favourite') : '');
+      return [star, ...(d.tags || []).map((tag) => `#${tag}`)].filter(Boolean).join('  ·  ');
     }
     const parts = [
       starCount(d) >= 2 ? t(`🌟 starred by {count} of you`, { count: starCount(d) }) : (isFavorite(d) ? t('⭐ favourite') : ''),
@@ -2218,7 +2496,7 @@ await initI18n();
         // A restaurant pick's next step is settling an evening, so take the
         // spinner straight into the date poll instead of making them dig it
         // out of the history. Travel picks book instead — no poll for them.
-        if (!isTravelWheel()) {
+        if (isFoodWheel()) {
           const entry = res.history.find((e) => e.dest_id === result.id);
           if (entry) openPollModal(entry, 'propose');
         }
@@ -2237,15 +2515,24 @@ await initI18n();
     const result = pendingResult;
     pendingResult = null;
     resultModal.close();
+    const waiting = state.round.pending;
+    let res;
     try {
-      applyRound(await api('/round/veto', {
+      res = await api('/round/veto', {
         method: 'POST',
         body: JSON.stringify({ dest_id: result.id }),
-      }));
+      });
+      applyRound(res);
     } catch (err) {
       console.error(err);
       wheelHint.textContent = `⚠️ ${err.message}`;
       refresh();
+      return;
+    }
+    if (res.settled) {
+      // your veto was your last say on the waiting pick — so that one stands
+      if (waiting) wheelHint.textContent = finalMessage(waiting);
+      syncWheelData();
       return;
     }
     if (currentSegments.length > 0) {
@@ -2266,6 +2553,7 @@ await initI18n();
   function renderPending() {
     const p = state.round.pending;
     pendingBanner.hidden = !p;
+    pendingWithdrawBtn.hidden = !(p && p.mine);
     if (!p) return;
     if (p.mine) {
       pendingText.textContent = t(`⏳ You picked {flag} {name} — waiting for {names} to give it a thumbs-up.`, { flag: p.flag, name: p.name, names: waitingNames(p) });
@@ -2301,6 +2589,27 @@ await initI18n();
     }
   });
 
+  pendingWithdrawBtn.addEventListener('click', async () => {
+    const p = state.round.pending;
+    if (!p || !p.mine) return;
+    try {
+      const round = await api('/round/pending', { method: 'DELETE' });
+      state.round = { ...state.round, pending: null };  // no "it's decided" message
+      applyRound(round);
+      wheelHint.textContent = t(`You took back {flag} {name} — spin again when you're ready.`, { flag: p.flag, name: p.name });
+    } catch (err) {
+      console.error(err);
+      wheelHint.textContent = `⚠️ ${err.message}`;
+    }
+  });
+
+  // Someone else's pick is waiting: answer that first — a new spin would
+  // otherwise trample their pick and the thumbs-ups it already has.
+  function blockedByPending() {
+    const p = state.round.pending;
+    return !!(p && !p.mine);
+  }
+
   pendingVetoBtn.addEventListener('click', async () => {
     const p = state.round.pending;
     if (!p || state.round.my_veto_used) return;
@@ -2316,23 +2625,61 @@ await initI18n();
     }
   });
 
-  // Other members' devices find out about vetoes, pending picks and
-  // fresh history by polling — plenty for people deciding on a sofa.
+  // Re-fetch the wheel's entries and history (someone else changed them).
+  async function syncWheelData() {
+    const id = wheelId;
+    const [destinations, history] = await Promise.all([api('/destinations'), api('/history')]);
+    if (id !== wheelId) return;  // switched wheels meanwhile
+    state.destinations = withoutPendingDeletes('dest', destinations);
+    const fresh = withoutPendingDeletes('history', history);
+    if (JSON.stringify(fresh) !== JSON.stringify(state.history)) {
+      state.history = fresh;
+      renderHistory();
+      reflectPollUpdates();  // a partner's vote or a fresh lock just landed
+    }
+    if (manageModal.open) renderDestList();
+    refresh();
+  }
+
+  // Refresh the account summary quietly: wheel names, members, invites —
+  // and notice being taken off the wheel we're looking at.
+  async function syncMe() {
+    const fresh = await rootApi('/me');
+    const before = JSON.stringify([me.wheels, me.invites]);
+    me = { ...fresh, prefs: me.prefs };
+    if (!me.wheels.some((w) => w.id === wheelId)) {
+      wheelId = '';
+      applyMe();
+      return;
+    }
+    if (JSON.stringify([me.wheels, me.invites]) !== before) {
+      renderTabs();
+      renderWheelInvites();
+      if (shareModal.open) renderShareSettings(currentWheel());
+    }
+  }
+
+  // Other members' devices find out about vetoes, pending picks, edits
+  // and fresh history by polling — plenty for people deciding on a sofa.
+  // The round carries the wheel's revision; only when that moves are the
+  // entries and history fetched again.
+  let pollTick = 0;
   setInterval(async () => {
     if (!me || !currentWheel() || appView.hidden || document.hidden || spinning) return;
+    pollTick += 1;
     try {
-      const [round, history] = await Promise.all([api('/round'), api('/history')]);
-      if (JSON.stringify(history) !== JSON.stringify(state.history)) {
-        state.history = history;
-        renderHistory();
-        reflectPollUpdates();  // a partner's vote or a fresh lock just landed
-        // a history change can also change the wheel: someone may have
-        // starred, edited, or marked an entry "been there"
-        state.destinations = await api('/destinations');
-        refresh();
+      const round = await api('/round');
+      if (round.rev !== state.rev) {
+        state.rev = round.rev;
+        await Promise.all([syncWheelData(), syncMe()]);
+      } else if (pollTick % 6 === 0) {
+        await syncMe();  // members and invites live on the accounts, not the wheel
       }
       applyRound(round);
-    } catch { /* transient — the next poll retries */ }
+    } catch (err) {
+      // a 404 means this wheel isn't ours any more (removed, or it's gone)
+      if (err.status === 404) syncMe().catch(() => {});
+    }
   }, 5000);
 
   // ── Confetti ──────────────────────────────────────────────────────
@@ -2412,6 +2759,139 @@ await initI18n();
       });
     });
   }
+
+  // ── Tag filter (restaurant & custom wheels) ──────────────────────
+  // One chip per tag used on the wheel; picking some keeps only entries
+  // carrying at least one of them. Saved per person, like trip filters.
+  function renderTagFilter() {
+    const tags = isTravelWheel() ? [] : wheelTags();
+    tagFilter.hidden = !tags.length;
+    const key = JSON.stringify([tags, activeTags()]);
+    if (tagFilter.dataset.key === key) return;  // nothing changed — keep focus etc.
+    tagFilter.dataset.key = key;
+    tagFilterChips.innerHTML = '';
+    if (!tags.length) return;
+    const active = activeTags();
+    const chip = (label, value, on) => {
+      const b = document.createElement('button');
+      b.type = 'button';
+      b.className = 'seg-btn';
+      b.textContent = label;
+      setActive(b, on);
+      b.addEventListener('click', () => {
+        if (spinning) return;
+        if (value === null) {
+          state.filters.tags = [];
+        } else {
+          const set = new Set(activeTags());
+          set.has(value) ? set.delete(value) : set.add(value);
+          state.filters.tags = [...set];
+        }
+        saveFilters();
+        refresh();
+      });
+      tagFilterChips.append(b);
+    };
+    chip(t('Any'), null, active.length === 0);
+    for (const tag of tags) chip(`#${tag}`, tag, active.includes(tag));
+  }
+
+  // ── Undo for deletions ────────────────────────────────────────────
+  // Deleting an entry or a pick takes effect on screen at once, but only
+  // reaches the server a few seconds later — "↩️ Undo" in the toast calls
+  // it off. One deletion is in flight at a time: starting another sends
+  // the previous one straight away, and so does closing the page.
+  const undoToast = document.getElementById('undo-toast');
+  const undoText = document.getElementById('undo-text');
+  const undoBtn = document.getElementById('undo-btn');
+  const UNDO_MS = 6000;
+  const pendingDeletes = { dest: new Set(), history: new Set() };
+  let undoJob = null;
+
+  function withoutPendingDeletes(kind, list) {
+    return list.filter((item) => !pendingDeletes[kind].has(item.id));
+  }
+
+  function deferDelete({ kind, id, text, hide, restore, path }) {
+    flushDelete();
+    pendingDeletes[kind].add(id);
+    hide();
+    const job = { kind, id, restore, path, wheel: wheelId };
+    job.timer = setTimeout(() => flushDelete(), UNDO_MS);
+    undoJob = job;
+    undoText.textContent = text;
+    showUndoToast(true);
+  }
+
+  // An open modal makes the rest of the page inert, so the toast moves
+  // into whichever dialog is open — and back out when that one closes —
+  // to keep Undo clickable while the manage list is up.
+  function showUndoToast(on) {
+    undoToast.hidden = !on;
+    if (on) (document.querySelector('dialog[open]') || document.body).append(undoToast);
+  }
+
+  document.addEventListener('close', (e) => {
+    if (e.target.contains(undoToast)) {
+      (document.querySelector('dialog[open]') || document.body).append(undoToast);
+    }
+  }, true);  // 'close' doesn't bubble — catch it on the way down
+
+  function flushDelete(keepalive = false) {
+    const job = undoJob;
+    if (!job) return;
+    undoJob = null;
+    clearTimeout(job.timer);
+    showUndoToast(false);
+    rootApi(`/wheels/${job.wheel}${job.path}`, { method: 'DELETE', keepalive })
+      .catch((err) => {
+        console.error(err);
+        if (job.wheel === wheelId && err.status !== 404) {
+          job.restore();
+          wheelHint.textContent = `⚠️ ${err.message}`;
+        }
+      })
+      .finally(() => pendingDeletes[job.kind].delete(job.id));
+  }
+
+  undoBtn.addEventListener('click', () => {
+    const job = undoJob;
+    if (!job) return;
+    undoJob = null;
+    clearTimeout(job.timer);
+    showUndoToast(false);
+    pendingDeletes[job.kind].delete(job.id);
+    if (job.wheel === wheelId) job.restore();
+  });
+
+  window.addEventListener('pagehide', () => flushDelete(true));
+
+  // ── Downloads that need the login token ───────────────────────────
+  async function downloadFromApi(path, fallbackName) {
+    const headers = { 'X-Lang': currentLanguage() };
+    if (token) headers.Authorization = `Bearer ${token}`;
+    const res = await fetch(`/api/wheels/${wheelId}${path}`, { headers });
+    if (!res.ok) {
+      let message = '';
+      try { message = (await res.json()).error; } catch { /* not JSON */ }
+      throw new Error(message || t(`Server said {status} for {path}`, { status: res.status, path }));
+    }
+    const disposition = res.headers.get('Content-Disposition') || '';
+    const match = disposition.match(/filename="([^"]+)"/);
+    saveBlob(await res.blob(), match ? match[1] : fallbackName);
+  }
+
+  function exportButton(id, path, name) {
+    document.getElementById(id).addEventListener('click', () => {
+      downloadFromApi(path, name).catch((err) => {
+        console.error(err);
+        wheelHint.textContent = `⚠️ ${err.message}`;
+      });
+    });
+  }
+  exportButton('export-csv-btn', '/export/history.csv', 'history.csv');
+  exportButton('export-ics-btn', '/export/history.ics', 'history.ics');
+  exportButton('export-wheel-btn', '/export/wheel.json', 'wheel.json');
 
   // ── Manage the wheel ──────────────────────────────────────────────
   manageBtn.addEventListener('click', () => {
@@ -2499,7 +2979,7 @@ await initI18n();
       meta.className = 'dest-meta';
       meta.textContent = isTravelWheel()
         ? `${d.budget} · ${t(DISTANCE_LABELS[d.distance])}`
-        : (d.notes ? d.notes.slice(0, 40) : '');
+        : ((d.tags || []).length ? d.tags.map((tag) => `#${tag}`).join(' ') : (d.notes ? d.notes.slice(0, 40) : ''));
 
       const edit = document.createElement('button');
       edit.type = 'button';
@@ -2513,16 +2993,27 @@ await initI18n();
       del.className = 'del-btn';
       del.title = t('Remove this entry');
       del.textContent = '✕';
-      del.addEventListener('click', async () => {
-        if (!confirm(t(`Remove {name} for good?`, { name: d.name }))) return;
-        try {
-          await api(`/destinations/${d.id}`, { method: 'DELETE' });
-          state.destinations = state.destinations.filter((x) => x.id !== d.id);
-          if (state.editingId === d.id) exitEditMode();
-          renderDestList();
-        } catch (err) {
-          console.error(err);
-        }
+      del.addEventListener('click', () => {
+        const index = state.destinations.findIndex((x) => x.id === d.id);
+        deferDelete({
+          kind: 'dest',
+          id: d.id,
+          path: `/destinations/${d.id}`,
+          text: t('{name} removed', { name: `${d.flag} ${d.name}` }),
+          hide: () => {
+            state.destinations = state.destinations.filter((x) => x.id !== d.id);
+            if (state.editingId === d.id) exitEditMode();
+            renderDestList();
+            refresh();
+          },
+          restore: () => {
+            if (!state.destinations.some((x) => x.id === d.id)) {
+              state.destinations.splice(Math.min(index, state.destinations.length), 0, d);
+            }
+            if (manageModal.open) renderDestList();
+            refresh();
+          },
+        });
       });
 
       li.append(checkbox, star, name, meta, edit, del);
@@ -2688,6 +3179,9 @@ await initI18n();
       setCheckedValues('add-seasons', d.seasons);
       setCheckedValues('add-party', d.party);
     } else {
+      addTagsInput.value = (d.tags || []).join(', ');
+    }
+    if (isFoodWheel()) {
       addLocation.value = d.location || '';
       addPlace = d.place || null;
       clearMapsResults();
@@ -2706,6 +3200,7 @@ await initI18n();
     formSubmit.textContent = t('➕ Add it');
     cancelEditBtn.hidden = true;
     addForm.reset();
+    addError.textContent = '';
     linkRows.innerHTML = '';
     resetLocationSearch();
   }
@@ -2718,7 +3213,7 @@ await initI18n();
     if (!name) return;
     const payload = {
       name,
-      flag: addFlagInput.value.trim() || (isTravelWheel() ? '📍' : '🍽️'),
+      flag: addFlagInput.value.trim() || (isTravelWheel() ? '📍' : (isFoodWheel() ? '🍽️' : '🎯')),
       notes: addNotes.value.trim(),
       links: collectLinks(),
     };
@@ -2729,9 +3224,13 @@ await initI18n();
       payload.seasons = checkedValues('add-seasons');
       payload.party = checkedValues('add-party');
     } else {
+      payload.tags = addTagsInput.value.split(',').map((tag) => tag.trim()).filter(Boolean);
+    }
+    if (isFoodWheel()) {
       payload.location = addLocation.value.trim();
       payload.place = addPlace;  // null unless a place was picked from search
     }
+    addError.textContent = '';
     try {
       if (state.editingId) {
         await patchDestination(state.editingId, payload);
@@ -2743,7 +3242,35 @@ await initI18n();
       renderDestList();
     } catch (err) {
       console.error(err);
-      alert(t('Could not save it — is the server still running?'));
+      addError.textContent = `⚠️ ${err.message || t('Could not save it — is the server still running?')}`;
+    }
+  });
+
+  // ── Bulk add (a pasted list, one entry per line) ──────────────────
+  const bulkLines = document.getElementById('bulk-lines');
+  const bulkAddBtn = document.getElementById('bulk-add-btn');
+  const bulkStatus = document.getElementById('bulk-status');
+
+  bulkAddBtn.addEventListener('click', async () => {
+    const lines = bulkLines.value;
+    if (!lines.trim()) { bulkLines.focus(); return; }
+    bulkAddBtn.disabled = true;
+    bulkStatus.textContent = '';
+    try {
+      const res = await api('/destinations/bulk', { method: 'POST', body: JSON.stringify({ lines }) });
+      state.destinations = withoutPendingDeletes('dest', res.destinations);
+      renderDestList();
+      refresh();
+      bulkLines.value = '';
+      const added = res.added.length;
+      const skipped = res.skipped.length;
+      bulkStatus.textContent = tn(added, '✅ Added 1 entry.', '✅ Added {n} entries.')
+        + (skipped ? ` ${tn(skipped, '1 was already on the wheel.', '{n} were already on the wheel.')}` : '');
+    } catch (err) {
+      console.error(err);
+      bulkStatus.textContent = `⚠️ ${err.message}`;
+    } finally {
+      bulkAddBtn.disabled = false;
     }
   });
 
@@ -2751,6 +3278,7 @@ await initI18n();
   function renderHistory() {
     historyList.innerHTML = '';
     clearHistoryBtn.hidden = state.history.length === 0;
+    historyExport.hidden = state.history.length === 0;
     if (state.history.length === 0) {
       const li = document.createElement('li');
       li.className = 'history-empty';
@@ -2771,7 +3299,8 @@ await initI18n();
       main.append(name);
       // Restaurant picks settle a date via a poll; surface where it's at
       // right in the history so it reads at a glance — no notification needed.
-      const chip = !isTravelWheel() ? pollStatusChip(item) : null;
+      // (travel picks only once a poll is running — most are booked another way)
+      const chip = isFoodWheel() || (isTravelWheel() && item.poll) ? pollStatusChip(item) : null;
       if (chip) {
         const b = document.createElement('button');
         b.type = 'button';
@@ -2786,11 +3315,25 @@ await initI18n();
       when.textContent = badge + new Date(item.date).toLocaleDateString(undefined, { day: 'numeric', month: 'short', year: 'numeric' });
       const titleBits = [];
       if (item.by) titleBits.push(t(`Picked by {by}`, { by: item.by }));
-      if (item.status === 'booked') titleBits.push('booked');
+      if (item.status === 'booked') titleBits.push(t('booked'));
       if (item.status === 'visited') titleBits.push(t('been there'));
-      if (item.trip_date) titleBits.push(`trip: ${item.trip_date}`);
+      if (item.trip_date) {
+        titleBits.push(item.trip_end
+          ? t('trip: {start} → {end}', { start: prettyDate(item.trip_date), end: prettyDate(item.trip_end) })
+          : t('trip: {start}', { start: prettyDate(item.trip_date) }));
+      }
       if (titleBits.length) when.title = titleBits.join(' · ');
-      li.append(main, when);
+      const side = document.createElement('div');
+      side.className = 'history-side';
+      const del = document.createElement('button');
+      del.type = 'button';
+      del.className = 'history-del';
+      del.title = t('Remove this pick from the history');
+      del.setAttribute('aria-label', del.title);
+      del.textContent = '✕';
+      del.addEventListener('click', () => deleteHistoryItem(item));
+      side.append(when, del);
+      li.append(main, side);
       historyList.append(li);
     }
   }
@@ -2823,6 +3366,27 @@ await initI18n();
       act: () => openPollModal(item, 'vote') };
   }
 
+  function deleteHistoryItem(item) {
+    const index = state.history.findIndex((e) => e.id === item.id);
+    deferDelete({
+      kind: 'history',
+      id: item.id,
+      path: `/history/${item.id}`,
+      text: t('{name} removed from the history', { name: `${item.flag} ${item.name}` }),
+      hide: () => {
+        state.history = state.history.filter((e) => e.id !== item.id);
+        renderHistory();
+        if (infoEntry && infoEntry.id === item.id) infoModal.close();
+      },
+      restore: () => {
+        if (!state.history.some((e) => e.id === item.id)) {
+          state.history.splice(Math.min(index, state.history.length), 0, item);
+        }
+        renderHistory();
+      },
+    });
+  }
+
   clearHistoryBtn.addEventListener('click', async () => {
     if (!confirm(t('Clear the whole spin history? This clears it for everyone on this wheel.'))) return;
     try {
@@ -2840,13 +3404,19 @@ await initI18n();
     currentSegments = eligibleDestinations();
     const n = currentSegments.length;
     const favs = currentSegments.filter(isFavorite).length;
+    let empty;
+    if (isTravelWheel()) empty = t('No matches — loosen a filter or two');
+    else if (activeTags().length && state.destinations.some((d) => d.enabled)) empty = t('Nothing has those tags — pick another');
+    else empty = isFoodWheel() ? t('Nothing on the wheel yet — add some spots below') : t('Nothing on the wheel yet — add some entries below');
+    let count;
+    if (isTravelWheel()) count = tn(n, '1 destination on the wheel', '{n} destinations on the wheel');
+    else if (isFoodWheel()) count = tn(n, '1 restaurant on the wheel', '{n} restaurants on the wheel');
+    else count = tn(n, '1 entry on the wheel', '{n} entries on the wheel');
     matchCount.textContent = n === 0
-      ? (isTravelWheel() ? t('No matches — loosen a filter or two') : t('Nothing on the wheel yet — add some spots below'))
-      : (isTravelWheel()
-        ? tn(n, '1 destination on the wheel', '{n} destinations on the wheel')
-        : tn(n, '1 restaurant on the wheel', '{n} restaurants on the wheel')) +
-        (favs > 0 ? ` · ${tn(favs, '⭐ 1 favourite with extra chance', '⭐ {n} favourites with extra chance')}` : '');
-    spinBtn.disabled = n === 0 || spinning;
+      ? empty
+      : count + (favs > 0 ? ` · ${tn(favs, '⭐ 1 favourite with extra chance', '⭐ {n} favourites with extra chance')}` : '');
+    spinBtn.disabled = n === 0 || spinning || blockedByPending();
+    renderTagFilter();
     drawWheel();
   }
 

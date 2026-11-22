@@ -6,6 +6,7 @@ from flask import abort
 from .core import (
     BUDGETS,
     DISTANCES,
+    MAX_TAGS,
     PARTIES,
     SEASONS,
     VIBES,
@@ -72,10 +73,28 @@ def dest_calendar_location(dest):
     return place.get("address") or dest.get("location") or ""
 
 
-def clean_destination(payload, existing=None, travel=True):
+def clean_tags(values, fallback):
+    """Free-form tags on a restaurant or custom entry ("pizza", "takeaway",
+    "2 players"): trimmed, lower-cased, deduplicated, MAX_TAGS at most."""
+    if not isinstance(values, list):
+        return list(fallback or [])
+    tags = []
+    for value in values:
+        tag = " ".join(str(value).split()).lower()[:24]
+        if tag and tag not in tags:
+            tags.append(tag)
+        if len(tags) >= MAX_TAGS:
+            break
+    return tags
+
+
+DEFAULT_FLAGS = {"restaurants": "🍽️", "custom": "🎯"}
+
+
+def clean_destination(payload, existing=None, wheel_type="holidays"):
     """Normalise and validate a destination payload; raises ValueError.
-    Restaurant entries skip the travel-only fields — they're just a
-    name, an emoji, a location, notes and links."""
+    Restaurant and custom entries skip the travel-only fields — they're
+    a name, an emoji, tags, notes and links (restaurants add a location)."""
     base = existing or {}
     if not isinstance(payload, dict):
         raise ValueError("expected a JSON object")
@@ -84,7 +103,8 @@ def clean_destination(payload, existing=None, travel=True):
     if not name:
         raise ValueError("name is required")
 
-    default_flag = "📍" if travel else "🍽️"
+    travel = wheel_type not in DEFAULT_FLAGS
+    default_flag = DEFAULT_FLAGS.get(wheel_type, "📍")
     dest = {
         "id": base.get("id") or "d-" + uuid.uuid4().hex[:10],
         "name": name,
@@ -97,6 +117,10 @@ def clean_destination(payload, existing=None, travel=True):
         "notes": str(payload.get("notes", base.get("notes", ""))).strip()[:1000],
         "links": clean_links(payload.get("links", base.get("links", [])), base.get("links", [])),
     }
+    if not travel:
+        dest["tags"] = clean_tags(payload.get("tags", base.get("tags", [])), base.get("tags", []))
+    if wheel_type == "custom":
+        return dest
     if not travel:
         # the restaurant's address — free text, or the formatted address of
         # a Google place picked in the form; it rides into the calendar

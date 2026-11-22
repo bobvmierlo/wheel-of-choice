@@ -25,7 +25,10 @@ export const WHEEL_TYPE_META = {
   holidays: { icon: '🌍', kicker: N_('Your next holiday is…'), noun: 'destination' },
   citytrips: { icon: '🏙️', kicker: N_('Your next city trip is…'), noun: 'destination' },
   restaurants: { icon: '🍽️', kicker: N_('Tonight you\'re eating at…'), noun: 'restaurant' },
+  custom: { icon: '🎯', kicker: N_('The wheel says…'), noun: 'entry' },
 };
+
+export const TRAVEL_TYPES = ['holidays', 'citytrips'];
 
 // Stars are per person (starred_by). One star doubles a wheel segment;
 // starred by two people triples it. Entries from before per-person stars

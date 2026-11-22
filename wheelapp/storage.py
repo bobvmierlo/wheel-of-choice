@@ -22,6 +22,17 @@ def is_travel(wheel):
     return WHEEL_TYPES[wheel["type"]]["travel"]
 
 
+def is_food(wheel):
+    """Restaurant wheels carry a location per entry and dinner-style polls."""
+    return wheel["type"] == "restaurants"
+
+
+def has_polls(wheel):
+    """Date polls: evenings on restaurant wheels, trips on travel wheels.
+    A custom ("anything") wheel picks things that need no date."""
+    return wheel["type"] != "custom"
+
+
 def catalog(wheel_type):
     return json.loads(WHEEL_TYPES[wheel_type]["seed"].read_text(encoding="utf-8"))
 
@@ -243,15 +254,36 @@ def load_db():
     return ensure_admin(db)
 
 
+def _bump_wheel_revs(db, before):
+    """Every wheel whose stored row changes gets its "rev" counter bumped.
+    Members' devices poll the round, which carries the rev — a new number
+    there means "something on this wheel changed, fetch it again", so an
+    entry a partner adds, edits or stars shows up without a reload."""
+    for key, wheel in (db.get("wheels") or {}).items():
+        if not isinstance(wheel, dict):
+            continue
+        old = before.get(("wheels", str(key)))
+        if old is not None and old == _dump(wheel):
+            continue
+        prev = 0
+        if old is not None:
+            try:
+                prev = int(json.loads(old).get("rev", 0))
+            except (ValueError, TypeError, AttributeError):
+                prev = 0
+        wheel["rev"] = max(prev, int(wheel.get("rev", 0) or 0)) + 1
+
+
 def save_db(db):
     """Write the database dict, touching only rows that changed since it
     was loaded. A dict that wasn't loaded (a restore, a migration result)
     replaces the database wholesale."""
-    rows = _rows_of(db)
     conn = _connect()
     try:
         conn.execute("BEGIN IMMEDIATE")
         before = db._rows if isinstance(db, Doc) and db._rows is not None else _read_rows(conn)
+        _bump_wheel_revs(db, before)
+        rows = _rows_of(db)
         gone = [k for k in before if k not in rows]
         changed = [(c, k, v) for (c, k), v in rows.items() if before.get((c, k)) != v]
         conn.executemany("DELETE FROM docs WHERE coll = ? AND key = ?", gone)

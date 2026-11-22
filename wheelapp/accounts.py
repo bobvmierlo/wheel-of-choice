@@ -157,14 +157,24 @@ def default_wheel_prefs():
 
 def clean_prefs(db, user, payload):
     """Per-wheel filter preferences, keyed by wheel id; unknown wheels
-    and unknown values are dropped. Restaurant wheels have no filters."""
+    and unknown values are dropped. Restaurant and custom wheels filter
+    on their entries' free-form tags only."""
     if not isinstance(payload, dict):
         payload = {}
     existing = user.get("prefs") or {}
     prefs = {}
     for wid in user.get("wheels", []):
         wheel = db["wheels"].get(wid)
-        if wheel is None or not storage.is_travel(wheel):
+        if wheel is None:
+            continue
+        if not storage.is_travel(wheel):
+            base = existing.get(wid) or {}
+            raw = payload.get(wid, base)
+            tags = raw.get("tags", []) if isinstance(raw, dict) else []
+            from .validation import clean_tags  # validation imports storage → accounts
+            tags = clean_tags(tags if isinstance(tags, list) else [], [])
+            if tags:
+                prefs[wid] = {"tags": tags}
             continue
         base = existing.get(wid) or default_wheel_prefs()
         raw = payload.get(wid, base)
@@ -346,6 +356,19 @@ def wheel_members(db, wheel_id):
     return sorted(u["name"] for u in wheel_member_users(db, wheel_id))
 
 
+def wheel_member_list(db, wheel_id):
+    return sorted(({"id": u["id"], "name": u["name"]} for u in wheel_member_users(db, wheel_id)),
+                  key=lambda m: m["name"].lower())
+
+
+def wheel_pending_invitee_list(db, wheel_id):
+    return sorted(
+        ({"id": u["id"], "name": u["name"]} for u in db["users"].values()
+         if wheel_id not in u.get("wheels", [])
+         and any(inv["wheel_id"] == wheel_id for inv in u.get("invites", []))),
+        key=lambda m: m["name"].lower())
+
+
 def wheel_pending_invitees(db, wheel_id):
     """Names of people invited to this wheel who haven't accepted yet —
     shown to the sharer as 'waiting to accept'. Someone who joined by
@@ -391,6 +414,9 @@ def wheel_summary(db, wheel):
         "code": wheel["code"],
         "members": wheel_members(db, wheel["id"]),
         "pending": wheel_pending_invitees(db, wheel["id"]),
+        # the same people with their ids — the share screen's remove buttons
+        "member_list": wheel_member_list(db, wheel["id"]),
+        "pending_list": wheel_pending_invitee_list(db, wheel["id"]),
     }
 
 
